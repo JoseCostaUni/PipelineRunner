@@ -1,0 +1,73 @@
+From 951860521123277c8d23d2f40549f45fa7161b48 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jos=C3=A9=20Costa?= <up202207871@up.pt>
+Date: Mon, 16 Nov 2026 22:08:37 +0000
+Subject: [PATCH] fix: honour subPath on emptyDir volumes
+
+---
+ pkg/slurm/prepare.go      |  9 +++++++++
+ pkg/slurm/prepare_test.go | 32 ++++++++++++++++++++++++++++++++
+ 2 files changed, 41 insertions(+)
+
+diff --git a/pkg/slurm/prepare.go b/pkg/slurm/prepare.go
+index ac34f7b..5a79c5f 100644
+--- a/pkg/slurm/prepare.go
++++ b/pkg/slurm/prepare.go
+@@ -2082,6 +2082,15 @@ func mountData(Ctx context.Context, config SlurmConfig, container *v1.Container,
+ 				} else {
+ 					mode = ":rw"
+ 				}
++				// Honour subPath, as the kubelet does: bind only that entry of the emptyDir.
++				// Argo mounts each input artifact this way (volume input-artifacts, subPath
++				// <artifact name>), so binding the whole directory gives the container a
++				// directory where it expects a file. The entry is not created here: an
++				// earlier container (Argo's init) writes it, file or directory, before this
++				// container starts.
++				if volumeMount.SubPath != "" {
++					edPath = filepath.Join(edPath, filepath.Clean("/" + volumeMount.SubPath)[1:])
++				}
+ 				edPath += (":" + volumeMount.MountPath + mode + " ")
+ 				edPaths = append(edPaths, " --bind "+edPath+" ")
+ 			}
+diff --git a/pkg/slurm/prepare_test.go b/pkg/slurm/prepare_test.go
+index f92dc37..e7b0667 100644
+--- a/pkg/slurm/prepare_test.go
++++ b/pkg/slurm/prepare_test.go
+@@ -1287,3 +1287,35 @@ func TestPrepareMountsSkipsPersistentVolumeClaim(t *testing.T) {
+ 		t.Errorf("PVC mount should be skipped, got %q", mounts)
+ 	}
+ }
++
++func TestPrepareMountsEmptyDirSubPath(t *testing.T) {
++	pod := v1.Pod{
++		ObjectMeta: metav1.ObjectMeta{Name: "wf", Namespace: "argo"},
++		Spec: v1.PodSpec{
++			Volumes: []v1.Volume{
++				{Name: "input-artifacts", VolumeSource: v1.VolumeSource{EmptyDir: &v1.EmptyDirVolumeSource{}}},
++			},
++			Containers: []v1.Container{{
++				Name: "main",
++				VolumeMounts: []v1.VolumeMount{
++					{Name: "input-artifacts", MountPath: "/tmp/input.txt", SubPath: "in"},
++					{Name: "input-artifacts", MountPath: "/escape", SubPath: "../../etc"},
++				},
++			}},
++		},
++	}
++	podData := &commonIL.RetrievedPodData{Pod: pod, Containers: []commonIL.RetrievedContainer{{Name: "main"}}}
++	dir := t.TempDir()
++
++	mounts, err := prepareMounts(context.Background(), SlurmConfig{ContainerRuntime: "singularity"}, podData, &pod.Spec.Containers[0], dir)
++	if err != nil {
++		t.Fatalf("prepareMounts: %v", err)
++	}
++	ed := filepath.Join(dir, "emptyDirs", "input-artifacts")
++	if !strings.Contains(mounts, "--bind "+filepath.Join(ed, "in")+":/tmp/input.txt:rw") {
++		t.Errorf("subPath not honoured, got %q", mounts)
++	}
++	if !strings.Contains(mounts, "--bind "+filepath.Join(ed, "etc")+":/escape:rw") {
++		t.Errorf("subPath must stay inside the emptyDir, got %q", mounts)
++	}
++}
+-- 
+2.43.0
+
