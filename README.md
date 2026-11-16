@@ -22,12 +22,14 @@ This repository provides automated setup scripts and test utilities for deployin
   - `global_storage/` - Cloud storage deployment. Contains `README.md`, `main.sh`, `cleanup.sh`, and `.env.example`
   - `hpc/` - High-Performance Computing deployment. Contains `README.md`, `main.sh`, `cleanup.sh`, and `.env.example`
     - `split-executor/` - The three wrappers (`sbatch`, `squeue`, `scancel`) and the Kubernetes API relay
+    - `subpath-fix/` - The one wrapper still needed with interLink 0.6.3 (plugin ignores `subPath` on emptyDirs)
   - `kubernetes/` - Kubernetes cluster deployment. Contains `README.md`, `main.sh`, `cleanup.sh`, and `.env.example`
 - **deploy/deucalion/** - Scripts that switch the split executor on and off over the existing deployment (`hpc-side.sh`, `k8s-side.sh`)
 - **tests/** - Test suites and validation
   - `datasets/` - test datasets for each workflow test
   - `workflows/` - Isabel's Argo workflow tests (sync modules and resource templates)
   - `argo-native/` - the same tests as plain Argo workflows with native artifacts, used with the split executor
+- **experiments/reverse-tunnel/** - interLink 0.6.3's reverse tunnel instead of the split executor, on the testbed (not run yet)
 - **docs/img/** - Architecture diagrams
 
 ## Setup of the original prototype

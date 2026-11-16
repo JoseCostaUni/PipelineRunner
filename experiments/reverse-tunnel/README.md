@@ -47,10 +47,10 @@ reply. Neither applies to Deucalion as such (there: a Service or ExternalName fo
 
 ## Running it (on the Mac)
 
-The testbed's Stage B must be up (`cd repositories/testbed && make vm-start`).
+The testbed's Stage B must be up (`cd ../testbed && make vm-start`, from the repository root).
 
 ```sh
-cd repositories/lisa-pipeline-runner_ze/.worktrees/reverse-tunnel/experiments/reverse-tunnel
+cd experiments/reverse-tunnel   # from the repository root
 ./run.sh install          # once: interLink 0.6.3 on ulisses (built from the tag if no release
                           # binaries: the 0.6.3 release has none yet), plugin 0.6.3 on login
 ./run.sh enable           # switch both sides to 0.6.3 + reverse tunnel

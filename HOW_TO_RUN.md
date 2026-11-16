@@ -2,6 +2,8 @@
 
 This guide gives the steps to run plain Argo workflows on HPC compute nodes without network, first on the local testbed and then on Deucalion through Ulisses. What the split executor is, and how its three scripts work, is explained in [APPROACH.md](APPROACH.md).
 
+The alternative without the split executor, interLink 0.6.3 with its reverse tunnel, has its own steps in [experiments/reverse-tunnel/README.md](experiments/reverse-tunnel/README.md).
+
 ## 1. Running it locally on the testbed
 
 The testbed (`../testbed`) is a small copy of Deucalion on three Lima virtual machines: a login node, an offline compute node, and `ulisses` with Isabel's Kubernetes side and MinIO. It reproduces what matters for this work: Slurm 23.11.4, Apptainer, a shared NFS file system, a compute node without network, and a login node that cannot connect to `ulisses`. Its README explains it in detail.
