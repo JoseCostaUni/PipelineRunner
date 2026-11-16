@@ -4,7 +4,11 @@ A setup and testing framework for the LISA pipeline infrastructure, supporting K
 
 ## Overview
 
-This repository provides automated setup scripts and test utilities for deploying and validating the LISA pipeline across different infrastructure environments.
+This repository provides automated setup scripts and test utilities for deploying and validating the LISA pipeline across different infrastructure environments. It is a fork of Isabel Moutinho's FEUP prototype that adds the **split executor**: plain Argo workflows, with native artifacts, run on HPC compute nodes that have no network. Argo's `init` and `wait` containers run on the HPC login node, and only `main` runs in the Slurm job. Three wrapper scripts replace the Slurm commands that the interLink sidecar calls, so neither Argo nor interLink is modified.
+
+## How to run
+
+**[HOW_TO_RUN.md](HOW_TO_RUN.md)** gives the steps to run the split executor, first on the local testbed and then on Deucalion through Ulisses. [APPROACH.md](APPROACH.md) explains how it works, what the three scripts do, and the test results.
 
 ## Important Notes
 - This repository currently contains placeholder account keys only.
@@ -17,13 +21,16 @@ This repository provides automated setup scripts and test utilities for deployin
 - **setup/** - Infrastructure setup scripts
   - `global_storage/` - Cloud storage deployment. Contains `README.md`, `main.sh`, `cleanup.sh`, and `.env.example`
   - `hpc/` - High-Performance Computing deployment. Contains `README.md`, `main.sh`, `cleanup.sh`, and `.env.example`
+    - `split-executor/` - The three wrappers (`sbatch`, `squeue`, `scancel`) and the Kubernetes API relay
   - `kubernetes/` - Kubernetes cluster deployment. Contains `README.md`, `main.sh`, `cleanup.sh`, and `.env.example`
-  
+- **deploy/deucalion/** - Scripts that switch the split executor on and off over the existing deployment (`hpc-side.sh`, `k8s-side.sh`)
 - **tests/** - Test suites and validation
   - `datasets/` - test datasets for each workflow test
-  - `workflows/` - Argo workflow tests
+  - `workflows/` - Isabel's Argo workflow tests (sync modules and resource templates)
+  - `argo-native/` - the same tests as plain Argo workflows with native artifacts, used with the split executor
+- **docs/img/** - Architecture diagrams
 
-## Setup
+## Setup of the original prototype
 
 ### Prerequisites
 - Kubernetes cluster machine access (ssh)
@@ -46,14 +53,10 @@ sudo ./setup/hpc/main.sh
 ```
 Each setup subdirectory includes its own `README.md` and a `cleanup.sh` helper.
 
-## Testing
+### Testing
 
 Run tests to validate your setup:
 1. Add the files in `/tests/datasets` to the MinIO DB.
 2. Run the tests in `/tests/workflows` in the Argo UI.
 
-## Trying the split executor on Deucalion
-
-`deploy/deucalion/README.md`: scripts and steps to switch the split executor on over Isabel's
-existing deployment (Ulisses + Deucalion), run the plain-Argo tests on an air-gapped partition,
-and switch it off again.
+To test the split executor instead, follow [HOW_TO_RUN.md](HOW_TO_RUN.md).

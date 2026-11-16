@@ -16,9 +16,12 @@ set -o pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ZE="$(cd "$HERE/../.." && pwd)"
 SRC="$ZE/setup/hpc/split-executor"
-[ -f "$HERE/deucalion.env" ] || { echo "missing $HERE/deucalion.env (copy deucalion.env.example)" >&2; exit 1; }
-# shellcheck disable=SC1091
-source "$HERE/deucalion.env"
+# Settings: deucalion.env next to this script, or the file named in SPLIT_ENV (the testbed rehearsal
+# uses testbed.env).
+ENV_FILE="${SPLIT_ENV:-$HERE/deucalion.env}"
+[ -f "$ENV_FILE" ] || { echo "missing $ENV_FILE (copy deucalion.env.example)" >&2; exit 1; }
+# shellcheck disable=SC1090
+source "$ENV_FILE"
 
 IL="$HPC_PROJECT_ROOT/.interlink"
 CFG="$IL/SlurmConfig.yaml"
@@ -129,7 +132,9 @@ case "${1:-}" in
     if [ -f "$BAK" ]; then say "backup $BAK already exists (enabled before): keeping the original backup"
     else cp -p "$CFG" "$BAK"; say "backup: $BAK"; fi
     rm -rf "$SE.new"; cp -r "$SRC" "$SE.new"
+    # Keep the relay's certificates and the registry of jobs that may still be running.
     [ -d "$RD" ] && cp -rp "$RD" "$SE.new/relay"
+    [ -d "$SE/jobs" ] && cp -rp "$SE/jobs" "$SE.new/jobs"
     rm -rf "$SE"; mv "$SE.new" "$SE"
     sb="$(key SbatchPath "$BAK")"; sb="${sb:-$(command -v sbatch)}"
     sq="$(key SqueuePath "$BAK")"; sq="${sq:-$(command -v squeue)}"
@@ -207,5 +212,5 @@ CONF
     n="$(ls -d "$jr"*/ 2>/dev/null | wc -l)"; say "== job folders in $jr: $n (they hold data, keys and tokens: see README, cleanup)"
     ;;
 
-  *) sed -n '2,15p' "$0"; exit 2;;
+  *) awk 'NR > 1 && !/^#/ {exit} NR > 1' "$0"; exit 2;;
 esac
