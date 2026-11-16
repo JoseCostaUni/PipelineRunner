@@ -1,0 +1,19 @@
+# TC04: reads a file from the Global Storage, transforms it, writes the result back.
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: native-04-read-write-
+  labels: {test: native-04}
+spec:
+  entrypoint: pipeline
+  templates:
+  - name: pipeline
+    dag:
+      tasks:
+      - name: compute-transform
+        templateRef: {name: lisa-modules, template: transform}
+        arguments:
+          parameters:
+          - {name: key, value: users/admin/test-04/write-file.txt}
+          artifacts:
+          - {name: file, s3: {key: users/admin/test-04/read-file.txt}}

@@ -1,0 +1,132 @@
+# System CronWorkflow tests a full big flow from input synchronization to output synchronization.
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: test-10-full-flow
+  namespace: argo
+spec:
+  schedule: "0 23 * * *" # everyday at midnight
+  timezone: "UTC"
+  suspend: false
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  startingDeadlineSeconds: 0
+  workflowSpec:
+    serviceAccountName: argo-system-scheduler
+    entrypoint: pipeline
+    templates:
+    - name: pipeline
+      dag:
+        tasks:
+        - name: input-sync
+          templateRef:
+            name: sync-module
+            template: sync
+            clusterScope: true
+          arguments:
+            parameters:
+            - name: input_uri
+              value: /users/system/test-10
+            - name: user
+              value: system
+
+        - name: compute-write
+          dependencies: [input-sync]
+          templateRef:
+            name: compute-write-module
+            template: compute-write
+            clusterScope: true
+          arguments:
+            parameters:
+            - name: text
+              value: "test-03"
+            - name: file
+              value: /users/system/test-10/file.txt
+            - name: cpu
+              value: "2"
+            - name: memory
+              value: "2Gi"
+            - name: user
+              value: system
+
+        - name: compute-transform
+          dependencies: [compute-write]
+          templateRef:
+            name: compute-transform-module
+            template: compute-transform
+            clusterScope: true
+          arguments:
+            parameters:
+            - name: input_file
+              value: /users/system/test-10/file.txt
+            - name: output_file
+              value: /users/system/test-10/transformed-file.txt
+            - name: cpu
+              value: "2"
+            - name: memory
+              value: "2Gi"
+            - name: user
+              value: system
+
+        - name: compute-simulate
+          dependencies: [compute-write]
+          templateRef:
+            name: compute-simulate-module
+            template: compute-simulate
+            clusterScope: true
+          arguments:
+            parameters:
+            - name: duration
+              value: "60"
+            - name: output_file
+              value: /users/system/test-10/simulation.txt
+
+        - name: compute-aggregate
+          dependencies: [compute-transform, compute-simulate]
+          templateRef:
+            name: compute-aggregate-module
+            template: compute-aggregate
+            clusterScope: true
+          arguments:
+            parameters:
+            - name: input_dir
+              value: /users/system/test-10
+            - name: output_file
+              value: /users/system/test-10/aggregate-file.txt
+            - name: cpu
+              value: "2"
+            - name: memory
+              value: "2Gi"
+            - name: user
+              value: system
+
+        - name: output-sync
+          dependencies: [compute-aggregate]
+          templateRef:
+            name: sync-module
+            template: sync
+            clusterScope: true
+          arguments:
+            parameters:
+            - name: output_uri
+              value: /users/system/test-10
+            - name: user
+              value: system
+
+        - name: compute-read
+          dependencies: [output-sync]
+          templateRef:
+            name: compute-read-module
+            template: compute-read
+            clusterScope: true
+          arguments:
+            parameters:
+            - name: file
+              value: /users/system/test-10/aggregate-file.txt
+            - name: cpu
+              value: "2"
+            - name: memory
+              value: "2Gi"
+            - name: user
+              value: system

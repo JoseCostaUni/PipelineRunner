@@ -1,0 +1,35 @@
+# What each test must produce, checked against Argo AND the Global Storage (not the Argo UI alone).
+# test	kind	what	expected
+#   phase   -       <workflow phase>
+#   step    <task>  <step phase>
+#   object  <key>   <text the object must contain>
+00	phase	-	Succeeded
+00	object	t1/result.txt	HELLO FROM THE GLOBAL STORAGE
+01	phase	-	Succeeded
+01	step	compute	Succeeded
+02	phase	-	Failed
+02	step	compute-read-success	Succeeded
+02	step	compute-read-fail	Failed
+03	phase	-	Succeeded
+03	object	users/admin/test-03/new-file.txt	This file was created by the compute-write module.
+04	phase	-	Succeeded
+04	object	users/admin/test-04/write-file.txt	THIS TEXT IS IN LOWER CASE.
+05	phase	-	Succeeded
+05	object	users/admin/test-05/write-file-1.txt	test-05-file-1
+05	object	users/admin/test-05/aggregate-file.txt	test-05-file-1
+05	object	users/admin/test-05/aggregate-file.txt	test-05-file-2
+05	object	users/admin/test-05/aggregate-file.txt	test-05-file-3
+06	phase	-	Succeeded
+06	object	users/admin/test-06/simulation.txt	completed after 120 seconds
+07	phase	-	Succeeded
+07	object	users/admin/test-07/file-1.txt	test-07-file
+07	object	users/admin/test-07/file-2.txt	TEST-07-FILE
+07	object	users/admin/test-07/file-3.txt	TEST-07-FILE
+09	phase	-	Succeeded
+09	step	compute-read	Succeeded
+09	object	users/admin/test-09/new-file.txt	test-09
+10	phase	-	Succeeded
+10	object	users/system/test-10/transformed-file.txt	TEST-03
+10	object	users/system/test-10/simulation.txt	completed after 60 seconds
+10	object	users/system/test-10/aggregate-file.txt	TEST-03
+10	step	compute-read	Succeeded

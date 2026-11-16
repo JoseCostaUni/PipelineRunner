@@ -1,0 +1,4 @@
+# Holds the Global Storage keys.
+deucalion.env
+# Results of k8s-side.sh test
+results/

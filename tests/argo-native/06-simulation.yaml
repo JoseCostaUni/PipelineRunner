@@ -1,0 +1,18 @@
+# TC06: a long-running computation (120 s of CPU), result kept in the Global Storage.
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: native-06-simulation-
+  labels: {test: native-06}
+spec:
+  entrypoint: pipeline
+  templates:
+  - name: pipeline
+    dag:
+      tasks:
+      - name: compute-simulate
+        templateRef: {name: lisa-modules, template: simulate}
+        arguments:
+          parameters:
+          - {name: duration, value: "120"}
+          - {name: key, value: users/admin/test-06/simulation.txt}

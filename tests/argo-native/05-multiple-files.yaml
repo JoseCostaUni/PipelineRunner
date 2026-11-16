@@ -1,0 +1,38 @@
+# TC05: three writes in parallel, then one step aggregates the folder into a single file.
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: native-05-multiple-files-
+  labels: {test: native-05}
+spec:
+  entrypoint: pipeline
+  templates:
+  - name: pipeline
+    dag:
+      tasks:
+      - name: compute-write-1
+        templateRef: {name: lisa-modules, template: write}
+        arguments:
+          parameters:
+          - {name: text, value: test-05-file-1}
+          - {name: key, value: users/admin/test-05/write-file-1.txt}
+      - name: compute-write-2
+        templateRef: {name: lisa-modules, template: write}
+        arguments:
+          parameters:
+          - {name: text, value: test-05-file-2}
+          - {name: key, value: users/admin/test-05/write-file-2.txt}
+      - name: compute-write-3
+        templateRef: {name: lisa-modules, template: write}
+        arguments:
+          parameters:
+          - {name: text, value: test-05-file-3}
+          - {name: key, value: users/admin/test-05/write-file-3.txt}
+      - name: compute-aggregate
+        dependencies: [compute-write-1, compute-write-2, compute-write-3]
+        templateRef: {name: lisa-modules, template: aggregate}
+        arguments:
+          parameters:
+          - {name: key, value: users/admin/test-05/aggregate-file.txt}
+          artifacts:
+          - {name: dir, s3: {key: users/admin/test-05}}

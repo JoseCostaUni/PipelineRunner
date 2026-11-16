@@ -1,0 +1,45 @@
+#!/bin/bash
+# Split executor: replacement for squeue (SlurmConfig SqueuePath). Runs on the login node.
+# The sidecar asks:  squeue --noheader -a --states=all -O exit_code,StateCompact -j <jid>
+# and parses "<exit code> <state>". This wrapper:
+#   - prints the exit code alone ("1", not Slurm's "1:0", whose "0" the plugin 0.6.1 misreads);
+#   - for split jobs, reports the pod as running until the login side (wait) has finished, and
+#     then the outcome of all containers (main on the compute node, init and wait on login).
+# Every other call is passed through unchanged.
+set -uo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC1091
+source "$HERE/split.conf"
+case " $* " in *exit_code,StateCompact*) ;; *) exec "$REAL_SQUEUE" "$@";; esac
+JID="${*: -1}"
+REAL="$("$REAL_SQUEUE" "$@" 2>/dev/null | head -n 1)"
+EC="$(awk '{split($1, a, ":"); print a[1]}' <<<"$REAL")"
+ST="$(awk '{print $2}' <<<"$REAL")"
+
+REG="$HERE/jobs/$JID"
+if [ ! -f "$REG" ]; then
+  if [ -n "$REAL" ]; then echo "$EC $ST"; exit 0; fi
+  exec "$REAL_SQUEUE" "$@"        # unknown job: let the sidecar see squeue's own error
+fi
+
+DIR="$(cat "$REG")"
+if [ ! -f "$DIR/.split-login-done" ]; then
+  # init still staging (job held) or wait still uploading after main ended
+  if [ -f "$DIR/.split-released" ] && [ "$ST" != PD ]; then echo "0 R"; else echo "0 PD"; fi
+  exit 0
+fi
+INIT_RC="$( { tr -dc '0-9' <"$DIR/init-init.status"; } 2>/dev/null)"
+if [ -n "$INIT_RC" ] && [ "$INIT_RC" != 0 ]; then echo "$INIT_RC F"; exit 0; fi
+case "$ST" in
+  R|PD|CG|S|ST|CF|RQ|RS) echo "${EC:-0} $ST"; exit 0;;   # main still going (wait ended early)
+esac
+# Highest exit code over: the login side itself, init, wait, main. Never 0 unless all were 0.
+HI="$( { tr -dc '0-9' <"$DIR/.split-login-done"; } 2>/dev/null)"; HI="${HI:-1}"
+for f in "$DIR"/init-*.status "$DIR"/run-*.status; do
+  [ -f "$f" ] || continue
+  v="$( { tr -dc '0-9' <"$f"; } 2>/dev/null)"
+  [ -n "$v" ] && [ "$v" -gt "$HI" ] && HI="$v"
+done
+# main must have reported, unless Slurm says the job completed
+if [ ! -f "$DIR/run-main.status" ] && [ "$HI" = 0 ] && [ "$ST" != CD ]; then HI="${EC:-1}"; [ "$HI" = 0 ] && HI=1; fi
+if [ "$HI" = 0 ]; then echo "0 CD"; else echo "$HI F"; fi

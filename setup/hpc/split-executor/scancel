@@ -1,0 +1,15 @@
+#!/bin/bash
+# Split executor: replacement for scancel (SlurmConfig ScancelPath). Runs on the login node.
+# Also stops the login side (init/wait) of a split job, then cancels the Slurm job.
+set -uo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC1091
+source "$HERE/split.conf"
+for JID in "$@"; do
+  REG="$HERE/jobs/$JID"
+  [ -f "$REG" ] || continue
+  DIR="$(cat "$REG")"
+  systemctl --user stop "split-$(basename "$DIR")" >/dev/null 2>&1 || pkill -f "$DIR/login.sh" >/dev/null 2>&1 || true
+  rm -f "$REG"
+done
+exec "$REAL_SCANCEL" "$@"

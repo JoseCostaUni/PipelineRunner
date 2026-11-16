@@ -1,0 +1,14 @@
+# TC01: runs a step that does nothing (basic execution).
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: native-01-simple-run-
+  labels: {test: native-01}
+spec:
+  entrypoint: pipeline
+  templates:
+  - name: pipeline
+    dag:
+      tasks:
+      - name: compute
+        templateRef: {name: lisa-modules, template: simple}

@@ -1,0 +1,48 @@
+# TC10: the full flow of her system CronWorkflow (write -> transform + simulate -> aggregate -> read),
+# as a plain Workflow: the schedule is not what is tested here.
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: native-10-full-flow-
+  labels: {test: native-10}
+spec:
+  entrypoint: pipeline
+  templates:
+  - name: pipeline
+    dag:
+      tasks:
+      - name: compute-write
+        templateRef: {name: lisa-modules, template: write}
+        arguments:
+          parameters:
+          - {name: text, value: test-03}
+          - {name: key, value: users/system/test-10/file.txt}
+      - name: compute-transform
+        dependencies: [compute-write]
+        templateRef: {name: lisa-modules, template: transform}
+        arguments:
+          parameters:
+          - {name: key, value: users/system/test-10/transformed-file.txt}
+          artifacts:
+          - {name: file, from: "{{tasks.compute-write.outputs.artifacts.file}}"}
+      - name: compute-simulate
+        dependencies: [compute-write]
+        templateRef: {name: lisa-modules, template: simulate}
+        arguments:
+          parameters:
+          - {name: duration, value: "60"}
+          - {name: key, value: users/system/test-10/simulation.txt}
+      - name: compute-aggregate
+        dependencies: [compute-transform, compute-simulate]
+        templateRef: {name: lisa-modules, template: aggregate}
+        arguments:
+          parameters:
+          - {name: key, value: users/system/test-10/aggregate-file.txt}
+          artifacts:
+          - {name: dir, s3: {key: users/system/test-10}}
+      - name: compute-read
+        dependencies: [compute-aggregate]
+        templateRef: {name: lisa-modules, template: read}
+        arguments:
+          artifacts:
+          - {name: file, from: "{{tasks.compute-aggregate.outputs.artifacts.file}}"}

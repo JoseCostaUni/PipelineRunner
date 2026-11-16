@@ -1,0 +1,108 @@
+# Isabel Moutinho's compute modules (setup/kubernetes/argo_templates/compute-*-module) as plain Argo
+# container templates with NATIVE artifacts: no sync modules, no resource templates, no paths on the
+# HPC side, nothing about interLink or Slurm. Inputs come from and outputs go to the default artifact
+# repository (key-only artifacts); steps pass data to each other as artifacts.
+# Same behaviour as hers, except: shorter sleeps (5 s instead of 30 s), and 'simulate' honours its
+# duration (hers always ran 300 s).
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: lisa-modules
+spec:
+  templates:
+  - name: simple
+    container:
+      image: alpine:3.20
+      command: [sh, -c]
+      args: ["echo 'compute module: doing nothing'; sleep 5"]
+      resources: {limits: {cpu: "1", memory: 256Mi}}
+
+  - name: read
+    inputs:
+      artifacts:
+      - name: file
+        path: /tmp/in/file
+    container:
+      image: alpine:3.20
+      command: [sh, -c]
+      args: ["set -e; echo 'compute module: read'; cat /tmp/in/file; sleep 5"]
+      resources: {limits: {cpu: "1", memory: 256Mi}}
+
+  - name: write
+    inputs:
+      parameters:
+      - name: text
+      - name: key          # where the file is kept in the Global Storage
+    outputs:
+      artifacts:
+      - name: file
+        path: /tmp/out/file
+        archive: {none: {}}
+        s3: {key: "{{inputs.parameters.key}}"}
+    container:
+      image: alpine:3.20
+      command: [sh, -c]
+      args: ["set -e; echo 'compute module: write'; mkdir -p /tmp/out; echo '{{inputs.parameters.text}}' > /tmp/out/file; sleep 5"]
+      resources: {limits: {cpu: "1", memory: 256Mi}}
+
+  - name: transform
+    inputs:
+      parameters:
+      - name: key
+      artifacts:
+      - name: file
+        path: /tmp/in/file
+    outputs:
+      artifacts:
+      - name: file
+        path: /tmp/out/file
+        archive: {none: {}}
+        s3: {key: "{{inputs.parameters.key}}"}
+    container:
+      image: alpine:3.20
+      command: [sh, -c]
+      args: ["set -e; echo 'compute module: transform'; mkdir -p /tmp/out; tr '[:lower:]' '[:upper:]' < /tmp/in/file > /tmp/out/file; sleep 5"]
+      resources: {limits: {cpu: "1", memory: 256Mi}}
+
+  - name: aggregate
+    inputs:
+      parameters:
+      - name: key
+      artifacts:
+      - name: dir          # a key prefix in the Global Storage: downloaded as a directory
+        path: /tmp/in/dir
+    outputs:
+      artifacts:
+      - name: file
+        path: /tmp/out/file
+        archive: {none: {}}
+        s3: {key: "{{inputs.parameters.key}}"}
+    container:
+      image: alpine:3.20
+      command: [sh, -c]
+      args: ["set -e; echo 'compute module: aggregate'; mkdir -p /tmp/out; cat /tmp/in/dir/* > /tmp/out/file; sleep 5"]
+      resources: {limits: {cpu: "1", memory: 256Mi}}
+
+  - name: simulate
+    inputs:
+      parameters:
+      - name: duration
+      - name: key
+    outputs:
+      artifacts:
+      - name: file
+        path: /tmp/out/file
+        archive: {none: {}}
+        s3: {key: "{{inputs.parameters.key}}"}
+    container:
+      image: alpine:3.20
+      command: [sh, -c]
+      args:
+      - |
+        set -e
+        echo "compute module: simulation"
+        END_TS=$(( $(date +%s) + {{inputs.parameters.duration}} ))
+        while [ "$(date +%s)" -lt "$END_TS" ]; do X=$((12345 * 67890)); done
+        mkdir -p /tmp/out
+        echo "completed after {{inputs.parameters.duration}} seconds" > /tmp/out/file
+      resources: {limits: {cpu: "1", memory: 256Mi}}

@@ -1,0 +1,24 @@
+# TC09: writes a file, then a second step reads it (passed as an artifact).
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: native-09-write-read-
+  labels: {test: native-09}
+spec:
+  entrypoint: pipeline
+  templates:
+  - name: pipeline
+    dag:
+      tasks:
+      - name: compute-write
+        templateRef: {name: lisa-modules, template: write}
+        arguments:
+          parameters:
+          - {name: text, value: test-09}
+          - {name: key, value: users/admin/test-09/new-file.txt}
+      - name: compute-read
+        dependencies: [compute-write]
+        templateRef: {name: lisa-modules, template: read}
+        arguments:
+          artifacts:
+          - {name: file, from: "{{tasks.compute-write.outputs.artifacts.file}}"}
