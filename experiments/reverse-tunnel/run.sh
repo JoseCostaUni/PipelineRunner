@@ -7,6 +7,7 @@
 #   ./run.sh install          interLink 0.6.3 on ulisses, plugin 0.6.3 + subPath fix on login
 #   ./run.sh enable           switch to 0.6.3 and the reverse tunnel (both sides)
 #   ./run.sh test [NN ...]    the plain-Argo tests (default: all), compute node offline
+#   ./run.sh version          which interLink is active on ulisses (0.6.3 or 0.6.1)
 #   ./run.sh diag             shadow pods, logs, sidecar settings
 #   ./run.sh disable          back to Isabel's 0.6.1 and her settings
 #
@@ -69,6 +70,12 @@ preflight() {
   sync_rt
 }
 
+# Which interLink the virtual kubelet on ulisses runs: $IL_VERSION (ours) or 0.6.1 (Isabel's).
+active_version() {
+  case "$(vsh ulisses sudo systemctl show -p ExecStart interlink-vk 2>/dev/null)" in
+    *"/opt/interlink-$IL_VERSION/"*) echo "$IL_VERSION";; *) echo 0.6.1;; esac
+}
+
 restore_test() {
   vroot ulisses t1-ulisses.sh offload off >/dev/null 2>&1 || true
   rt ulisses ulisses.sh offload off >/dev/null 2>&1 || true
@@ -87,14 +94,17 @@ case "$cmd" in
     ;;
   enable)
     preflight
+    # Login node first: the virtual node on ulisses only becomes Ready when the plugin answers.
+    step "login: plugin $IL_VERSION" rt login login.sh use new norestart
+    step "login: SocketDirRoot, subPath fix, no data wrapper (restarts the plugin)" rt login login.sh config on
     step "ulisses: interLink $IL_VERSION" rt ulisses ulisses.sh use new
-    step "login: plugin $IL_VERSION" rt login login.sh use new
-    step "login: SocketDirRoot, subPath fix, no data wrapper" rt login login.sh config on
     step "ulisses: ssh shadow with reverse tunnel" rt ulisses ulisses.sh reverse on
     info "enabled; next: ./run.sh test 00"
     ;;
   test)
     preflight
+    [ "$(active_version)" = "$IL_VERSION" ] \
+      || die "interLink $IL_VERSION is not the one running on ulisses: run ./run.sh enable first (or make init-new)"
     tests="$*"; [ -n "$tests" ] || tests="${RT_TESTS:-00 01 02 03 04 05 06 07 09 10}"
     mkdir -p "$OUT"
     NET0="$(vroot cn netmode.sh get)"
@@ -129,6 +139,10 @@ case "$cmd" in
       && { tar xzf "t1-jobs-$TS.tar.gz" -C jobs 2>/dev/null || true; } && rm -f ./*.tar.gz )
     info "summary: $OUT/summary.txt (Argo objects in argo/, job folders in jobs/)"
     ;;
+  version)
+    running ulisses || die "VM $(vm ulisses) is not running"
+    active_version
+    ;;
   diag)
     preflight
     rt ulisses ulisses.sh diag
@@ -136,11 +150,11 @@ case "$cmd" in
     ;;
   disable)
     preflight
-    step "ulisses: reverse tunnel off" rt ulisses ulisses.sh reverse off
-    step "ulisses: interLink 0.6.1" rt ulisses ulisses.sh use 0.6.1
     step "login: Isabel's SlurmConfig.yaml" rt login login.sh config off
     step "login: plugin 0.6.1" rt login login.sh use 0.6.1
+    step "ulisses: reverse tunnel off" rt ulisses ulisses.sh reverse off
+    step "ulisses: interLink 0.6.1" rt ulisses ulisses.sh use 0.6.1
     info "back to Isabel's 0.6.1 setup"
     ;;
-  *) sed -n '2,16p' "$0"; exit 2;;
+  *) sed -n '2,17p' "$0"; exit 2;;
 esac

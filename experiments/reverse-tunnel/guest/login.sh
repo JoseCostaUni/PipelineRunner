@@ -13,7 +13,8 @@ CFG="$IL/SlurmConfig.yaml"
 BAK="$IL/SlurmConfig.yaml.pre-rt"
 NEWBIN="$IL/rt-$IL_VERSION/interlink-sidecar-slurm_Linux_arm64"
 SPF="$HPC_ROOT/subpath-fix"
-SOCK="$HPC_ROOT/.interlink/sock"
+SOCK="$HPC_ROOT/rt-sock"   # no path element may start with a dot (plugin check)
+RES="$HPC_ROOT/rt-resources.sh"
 UNITD=/home/lisa/.config/systemd/user/interlink-sidecar.service.d
 
 restart_sidecar() { lisa_ssh "systemctl --user daemon-reload; systemctl --user restart interlink-sidecar"; sleep 6
@@ -34,12 +35,12 @@ case "${1:-}:${2:-}" in
   use:new|use:0.6.1)
     if [ "$2" = new ]; then
       [ -x "$NEWBIN" ] || { log "ERROR: run install first"; exit 1; }
-      mkdir -p "$UNITD"
-      printf '[Service]\nExecStart=\nExecStart=%s\n' "$NEWBIN" >"$UNITD/rt.conf"
-      chown -R lisa:lisa /home/lisa/.config/systemd
+      # As lisa: root cannot write in her home (as on a real cluster with root-squashed homes).
+      lisa_ssh "mkdir -p '$UNITD' && printf '[Service]\nExecStart=\nExecStart=%s\n' '$NEWBIN' >'$UNITD/rt.conf'"
     else
-      rm -f "$UNITD/rt.conf"; rmdir "$UNITD" 2>/dev/null || true
+      lisa_ssh "rm -f '$UNITD/rt.conf'; rmdir '$UNITD' 2>/dev/null; true"
     fi
+    [ "${3:-}" = norestart ] && { log "drop-in written; the plugin restarts with the next step"; exit 0; }
     restart_sidecar
     log "sidecar runs: $(lisa_ssh 'systemctl --user show -p ExecStart interlink-sidecar' | grep -o 'path=[^ ;]*')"
     ;;
@@ -54,16 +55,22 @@ case "${1:-}:${2:-}" in
     done
     sed -i -e "s#^SbatchPath: .*#SbatchPath: \"$SPF/sbatch\"#" -e 's#^CommandPrefix: .*#CommandPrefix: ""#' "$CFG"
     sed -i '/^SocketDirRoot:/d' "$CFG"; printf 'SocketDirRoot: "%s"\n' "$SOCK" >>"$CFG"
+    # Plugin 0.6.3 reports the node's FREE cpu/memory on every ping and the virtual kubelet takes
+    # that as the node's capacity. On the testbed's small compute node that drops below one pod's
+    # request (seen: 200Mi), so pods stay Pending. Report Isabel's fixed capacity instead.
+    printf '#!/bin/sh\necho %s\n' "'{\"status\":\"ok\",\"resources\":{\"cpu\":\"100\",\"memory\":\"3T\",\"pods\":\"10k\"}}'" >"$RES"
+    chmod 0755 "$RES"; chown lisa:lisa "$RES"
+    sed -i '/^ResourceScriptPath:/d' "$CFG"; printf 'ResourceScriptPath: "%s"\n' "$RES" >>"$CFG"
     restart_sidecar
-    grep -E '^(SbatchPath|CommandPrefix|ImagePrefix|SocketDirRoot):' "$CFG"
+    grep -E '^(SbatchPath|CommandPrefix|ImagePrefix|SocketDirRoot|ResourceScriptPath):' "$CFG"
     ;;
   config:off)
     if [ -f "$BAK" ]; then cp -p "$BAK" "$CFG"; rm -f "$BAK"; restart_sidecar; fi
-    grep -E '^(SbatchPath|CommandPrefix|ImagePrefix|SocketDirRoot):' "$CFG" || true
+    grep -E '^(SbatchPath|CommandPrefix|ImagePrefix|SocketDirRoot|ResourceScriptPath):' "$CFG" || true
     ;;
   status:)
     echo "sidecar: $(lisa_ssh 'systemctl --user is-active interlink-sidecar') $(lisa_ssh 'systemctl --user show -p ExecStart interlink-sidecar' | grep -o 'path=[^ ;]*')"
-    grep -E '^(SbatchPath|CommandPrefix|ImagePrefix|SocketDirRoot):' "$CFG"
+    grep -E '^(SbatchPath|CommandPrefix|ImagePrefix|SocketDirRoot|ResourceScriptPath):' "$CFG"
     sed -n '/^SingularityDefaultOptions:/,/^[A-Za-z]/p' "$CFG" | sed '$d'
     echo "sockets: $(ls "$SOCK" 2>/dev/null | wc -l) pod dirs in $SOCK"
     ;;

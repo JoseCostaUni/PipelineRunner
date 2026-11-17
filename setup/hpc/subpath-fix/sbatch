@@ -21,10 +21,21 @@ JOB="$DIR/job.sh"
 LOG="$DIR/subpath-fix.log"
 log() { echo "$(date -Is) $*" >>"$LOG"; }
 
-ENVF=""
-for c in main wait; do [ -f "$DIR/${c}_envfile.properties" ] && { ENVF="$DIR/${c}_envfile.properties"; break; }; done
-if [ ! -f "$JOB" ] || [ -z "$ENVF" ]; then
+# Always hand Slurm a job.sh that is a new file (copy, then rename). The plugin's own job.sh can
+# still count as open for writing where the job runs (seen on the testbed, whose compute node is
+# also the NFS server), and executing it then fails with "Text file busy".
+submit() {
+  if [ -f "$JOB" ] && cp -p "$JOB" "$JOB.new" 2>/dev/null; then
+    [ -n "${1:-}" ] && printf '%s\n' "$1" >"$JOB.new"
+    mv -f "$JOB.new" "$JOB"
+  fi
   exec "$REAL_SBATCH" "$SLURM_FILE"
+}
+
+# Not every container's env file carries ARGO_TEMPLATE (main's does not): take one that does.
+ENVF="$(grep -l '^ARGO_TEMPLATE=' "$DIR"/*_envfile.properties 2>/dev/null | head -n 1)"
+if [ ! -f "$JOB" ] || [ -z "$ENVF" ]; then
+  submit
 fi
 
 # ARGO_TEMPLATE maps each input artifact's path to its name. No JSON parser needed: Argo writes the
@@ -34,7 +45,7 @@ fi
 TPL="$( set +u; set -a; source "$ENVF" >/dev/null 2>&1; printf '%s' "${ARGO_TEMPLATE:-}" )"
 TPL="${TPL%%\"outputs\":*}"
 MAP="$(printf '%s' "$TPL" | grep -o '"name":"[^"]*","path":"[^"]*"' | awk -F'"' '{print $8 "\t" $4}')"
-[ -n "$MAP" ] || exec "$REAL_SBATCH" "$SLURM_FILE"
+[ -n "$MAP" ] || { log "no input artifacts in ARGO_TEMPLATE: nothing to rewrite"; submit; }
 
 NEWJOB="$(cat "$JOB")"
 ED="$DIR/emptyDirs/input-artifacts"
@@ -54,10 +65,6 @@ done <<<"$MAP"
 
 if [ "$changed" = 1 ]; then
   cp -p "$JOB" "$DIR/job.sh.orig"
-  # New file, then rename: a file just rewritten on the shared FS can still count as open for
-  # writing on the compute node, and executing it then fails with "Text file busy".
-  printf '%s\n' "$NEWJOB" >"$JOB.new"
-  chmod --reference="$JOB" "$JOB.new" 2>/dev/null || chmod 0774 "$JOB.new"
-  mv -f "$JOB.new" "$JOB"
+  submit "$NEWJOB"
 fi
-exec "$REAL_SBATCH" "$SLURM_FILE"
+submit
