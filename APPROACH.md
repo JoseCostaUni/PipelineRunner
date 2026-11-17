@@ -65,8 +65,9 @@ All results come from the testbed (`testbed/`), a small copy of Deucalion on Lim
 |---|---|---|
 | `t1-20261018-005325` | 18 Oct 2026 | All tests pass, 30 of 30 checks (`make test-t1`) |
 | `20261116-220707` | 16 Nov 2026 | All tests pass, 30 of 30 checks, through the Deucalion scripts (`deploy/deucalion`) with the testbed's settings, after the HPC side stopped needing Python and jq |
+| `20261117-222712-split` | 17 Nov 2026 | All tests pass, 30 of 30 checks, through the same scripts after they gained the `reverse` mode, switched from `reverse` with `k8s-side.sh mode split` |
 
-In both runs, `main` ran on the compute node for every pod and `init` and `wait` ran on the login node, with all API calls going through the relay. Each test took between 30 seconds and about 3 minutes, including simulations of 120 and 60 seconds in TC06 and TC10. The next step is the same procedure on Deucalion's `normal-x86` partition.
+In all these runs, `main` ran on the compute node for every pod and `init` and `wait` ran on the login node, with all API calls going through the relay. Each test took between 30 seconds and about 3 minutes, including simulations of 120 and 60 seconds in TC06 and TC10. The next step is the same procedure on Deucalion's `normal-x86` partition.
 
 ## 6. Known limits
 
@@ -99,21 +100,22 @@ The mode was first tried on the testbed with `experiments/reverse-tunnel/` (its 
 |---|---|---|
 | `20261117-011154`, `-022804`, `-024031` | 17 Nov 2026 | All tests pass across the three runs of the experiment, after its fixes |
 | `20261117-215316-reverse` | 17 Nov 2026 | All tests pass in one run, 30 of 30 checks, through the Deucalion scripts (`k8s-side.sh mode reverse`) |
+| `20261117-224236-reverse` | 17 Nov 2026 | TC00 and TC04 pass after switching back from `split` with `k8s-side.sh mode reverse` |
 
-In this mode `init`, `main` and `wait` all run in the Slurm job on the offline compute node, so every artifact and every API call of these runs went through the tunnel; the job's log shows `interLink: reverse tunnel ready` before the containers start. Time per test, both through the Deucalion scripts on the testbed:
+In this mode `init`, `main` and `wait` all run in the Slurm job on the offline compute node, so every artifact and every API call of these runs went through the tunnel; the job's log shows `interLink: reverse tunnel ready` before the containers start. Time per test, both runs through the Deucalion scripts on the testbed on the same evening:
 
-| Test | `split` (`20261116-220707`) | `reverse` (`20261117-215316-reverse`) |
+| Test | `split` (`20261117-222712-split`) | `reverse` (`20261117-215316-reverse`) |
 |---|---|---|
-| TC00 | 1m02s | 1m39s |
-| TC01 | 0m34s | 1m26s |
-| TC02 | 0m30s | 1m34s |
-| TC03 | 0m34s | 1m30s |
-| TC04 | 0m35s | 1m38s |
-| TC05 | 1m21s | 4m26s |
-| TC06 | 2m25s | 3m30s |
-| TC07 | 1m31s | 5m28s |
-| TC09 | 1m02s | 3m38s |
-| TC10 | 3m07s | 7m37s |
+| TC00 | 0m31s | 1m39s |
+| TC01 | 0m33s | 1m26s |
+| TC02 | 0m41s | 1m34s |
+| TC03 | 0m20s | 1m30s |
+| TC04 | 0m30s | 1m38s |
+| TC05 | 1m35s | 4m26s |
+| TC06 | 2m18s | 3m30s |
+| TC07 | 1m37s | 5m28s |
+| TC09 | 1m00s | 3m38s |
+| TC10 | 2m54s | 7m37s |
 
 `reverse` is slower because every pod waits for its tunnel before its containers start: the shadow pod starts, logs in, waits for the job to run and starts the sshd in it. That took about 80 seconds per pod on the testbed, so it adds about a minute to every step. On Deucalion the queue of `normal-x86` comes on top, in both modes.
 

@@ -408,8 +408,9 @@ YAML
     ;;
 
   offload:on)
-    SAVED="$STATE/workflowDefaults.saved"
-    [ -f "$SAVED" ] || kubectl -n argo get cm "$CM" -o json | jq -r '.data.workflowDefaults // ""' >"$SAVED"
+    # Saved as JSON, so 'off' can tell "absent" (null) from any value and put back exactly what was there.
+    SAVED="$STATE/workflowDefaults.json"
+    [ -f "$SAVED" ] || kubectl -n argo get cm "$CM" -o json | jq '.data.workflowDefaults' >"$SAVED"
     defaults="spec:
   nodeSelector:
     kubernetes.io/hostname: $INTERLINK_NODE_NAME
@@ -428,12 +429,13 @@ YAML
     say "Note: this applies to ALL workflows of this Argo, including Isabel's own tests. Switch off after the trial."
     ;;
   offload:off)
-    SAVED="$STATE/workflowDefaults.saved"
+    SAVED="$STATE/workflowDefaults.json"
     [ -f "$SAVED" ] || { say "offload already off"; exit 0; }
-    if [ -s "$SAVED" ]; then
-      kubectl -n argo patch cm "$CM" --type merge -p "$(jq -n --rawfile v "$SAVED" '{data: {workflowDefaults: $v}}')" >/dev/null
-    else
+    if [ "$(cat "$SAVED")" = null ]; then
       kubectl -n argo patch cm "$CM" --type json -p '[{"op":"remove","path":"/data/workflowDefaults"}]' >/dev/null 2>&1 || true
+    else
+      kubectl -n argo patch cm "$CM" --type merge -p "$(jq -n --slurpfile v "$SAVED" '{data: {workflowDefaults: $v[0]}}')" >/dev/null \
+        || { say "ERROR: could not restore workflowDefaults from $SAVED"; exit 1; }
     fi
     rm -f "$SAVED"; sleep 5; say "offload OFF: workflowDefaults restored"
     ;;

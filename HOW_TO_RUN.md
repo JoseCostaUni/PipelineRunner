@@ -72,7 +72,7 @@ export SPLIT_ENV=$PWD/testbed.env
 
 Make sure the compute node is offline with `make net-normal` on the Mac, then follow section 2 from step 2.3 onwards in these two shells. On the testbed, `hpc-side.sh check` reports that the Kubernetes API is not reachable, so `split` uses the relay, as it most likely will on Deucalion. At the end, run the clean-up of step 2.9 so the testbed is left as it was.
 
-On 16 November 2026 this rehearsal passed all ten tests in `split` (run `20261116-220707`, 30 of 30 checks). On 17 November 2026 it passed again in both modes, switching between them with `k8s-side.sh mode` (see [APPROACH.md](APPROACH.md) section 7).
+On 16 November 2026 this rehearsal passed all ten tests in `split` (run `20261116-220707`, 30 of 30 checks). On 17 November 2026 it passed all ten tests in both modes, switching between them with `k8s-side.sh mode`: `reverse` in run `20261117-215316-reverse` and `split` in run `20261117-222712-split`, both 30 of 30 checks. `restore` then left both sides byte for byte as they were (see [APPROACH.md](APPROACH.md) sections 5 and 7).
 
 ## 2. Running it on Deucalion through Ulisses
 
