@@ -2,7 +2,7 @@
 # plain Argo workflows on it. Run 'make' to list the targets.
 #
 #   make init-old     testbed with interLink 0.6.1 (Isabel's setup) -> tests use the split executor
-#   make init-new     testbed with interLink 0.6.3 + reverse tunnel  -> tests use no wrapper scripts
+#   make init-new     testbed with interLink 0.6.3 + reverse tunnel  -> tests use one wrapper (subPath fix)
 #   make test         run the tests that match what is active (TESTS="00 05" for a subset)
 #   make clean-all    delete the VMs and their state, to start from zero
 #
@@ -36,7 +36,7 @@ init-old: vms ## Testbed with interLink 0.6.1 (Isabel's setup; tests use the spl
 	$(RT) disable
 	@echo "==> active interLink: $$($(RT) version). Next: make test"
 
-init-new: vms ## Testbed with interLink 0.6.3 and the reverse tunnel (no wrapper scripts)
+init-new: vms ## Testbed with interLink 0.6.3 and the reverse tunnel (one wrapper: subPath fix)
 	$(RT) install
 	$(RT) enable
 	@echo "==> active interLink: $$($(RT) version). Next: make test TESTS=00"

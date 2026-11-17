@@ -40,14 +40,20 @@ shadow pod on ulisses (ssh-reverse) <──────────────�
   - plugin: `SocketDirRoot`, `CommandPrefix: ""` (Isabel's data wrapper off), `--no-eval
     --contain`, pre-pulled images (`ImagePrefix`).
 
-Testbed-only details: the Global Storage (MinIO in Docker on ulisses) gets a Service name, because
-the tunnel maps names, not IPs; and a NAT rule on ulisses, because Calico's default pod range
-contains the VM network, so a shadow pod's connection to the login node would otherwise get no
-reply. Neither applies to Deucalion as such (there: a Service or ExternalName for Isabel's MinIO).
+The Global Storage (MinIO in Docker on ulisses) gets a Service name, because the tunnel maps names,
+not IPs. `ulisses.sh` also adds a NAT rule for shadow pods, written for Calico's default pod range;
+it turned out not to be needed, because Calico picked 172.16.0.0/16 on the testbed and a pod reaches
+the login node without it (checked on 17 Nov 2026).
+
+**On Deucalion** this mode is run with the trial scripts, not with this folder:
+`../../deploy/deucalion/k8s-side.sh mode reverse` (steps in `../../HOW_TO_RUN.md`, section 2). They
+make the same changes, for any CPU architecture, with Isabel's MinIO under a Service name, and they
+delete the SSH key Secret and interLink's copies of it when the mode is switched off.
 
 ## Running it (on the Mac)
 
-The testbed's Stage B must be up (`cd ../testbed && make vm-start`, from the repository root).
+From the repository root, `make init-new` runs `install` and `enable`, `make test` runs the tests
+and `make init-old` runs `disable`. The same steps by hand:
 
 ```sh
 cd experiments/reverse-tunnel   # from the repository root
@@ -79,19 +85,26 @@ and backups of the two configuration files (`VirtualKubeletConfig.yaml.pre-rt`,
 | Throughput | login node's network | Slurm I/O forwarding (srun carrier) |
 | Isolation | same account, job folders hold keys | same, plus a relay that only accepts the job's user |
 
-Measure at least: pass/fail per test, time per test against T1 (`../../../testbed/logs/t1-*`),
-and the time of TC06/TC10 with a larger artifact to see the srun carrier's throughput.
+Measure at least: pass/fail per test, time per test against T1 (`../../testbed/logs/t1-*`),
+and the time of TC06/TC10 with a larger artifact to see the srun carrier's throughput (not done
+yet).
 
-## Not verified yet
+## Results
 
-Written without running the testbed (it runs on the Mac, this was prepared remotely). Things that
-may need a fix on the first run, in the order they would show up:
+Run on the testbed on 16 and 17 November 2026. interLink 0.6.3 had to be built from its tag (the
+release has no binaries), and Isabel's configuration files worked with the 0.6.3 binaries. The
+first runs found three problems, all fixed in this folder and in `setup/hpc/subpath-fix`:
 
-1. building interLink 0.6.3 on ulisses (Go version, module downloads);
-2. the shadow image `ghcr.io/interlink-hq/interlink/ssh-tunnel:0.6.3` for arm64 (falls back to
-   building it with Docker);
-3. Isabel's `InterLinkConfig.yaml`/`VirtualKubeletConfig.yaml` with 0.6.3 binaries;
-4. `srun --overlap` from the login node on the testbed's Slurm, and the user-space sshd on Rocky 9;
-5. the NAT rule for the shadow pod.
+1. the plugin refused a `SocketDirRoot` under `.interlink` (no path element may start with a dot);
+2. plugin 0.6.3 reports the free memory it sees as the virtual node's capacity, which fell to
+   200Mi, below one pod's request, so pods stayed `Pending` (TC05 stopped after 20 minutes in run
+   `20261117-011154`); the plugin now reports a fixed capacity through `ResourceScriptPath`;
+3. TC09 and TC10 failed in the same run (`main` exited with 1). Before the next run the subPath
+   fix was changed to read `ARGO_TEMPLATE` from whichever container's env file has it (`main`'s
+   does not) and to always hand Slurm a new `job.sh`, and both passed.
+
+After the fixes all ten tests passed: TC00-TC04, TC06 and TC07 in `20261117-011154`, TC09 and TC10
+in `20261117-022804`, TC05 in `20261117-024031`. The same mode then passed through the Deucalion
+scripts, see `../../APPROACH.md`, section 7.
 
 `./run.sh diag` and `results/<time>/run.log` are the first places to look.

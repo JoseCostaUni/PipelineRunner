@@ -31,9 +31,10 @@ CACHE="$TBDIR/cache"
 LOGS="$TBDIR/logs"
 GUEST="$TBDIR/guest"
 # Isabel Moutinho's repository (FEUP prototype), used unchanged except for CPU architecture names.
-LPR_DIR="${LPR_DIR:-$TBDIR/../lisa-pipeline-runner}"
+# It sits next to José's fork, which holds this folder.
+LPR_DIR="${LPR_DIR:-$TBDIR/../../lisa-pipeline-runner}"
 # José's fork, for the split executor (T2): setup/hpc/split-executor.
-ZE_DIR="${ZE_DIR:-$TBDIR/../lisa-pipeline-runner_ze}"
+ZE_DIR="${ZE_DIR:-$TBDIR/..}"
 
 PREFIX="tb"
 ALL_VMS="cn login ulisses"

@@ -4,6 +4,8 @@
 
 On Deucalion, the login nodes reach the internet, but the compute nodes of the `normal-*` partitions do not. Anything that moves data between the Global Storage and the HPC side, or reports results to Kubernetes, therefore has to run where there is network, while the computation itself runs on a compute node. Scientists should still be able to write ordinary Argo workflows, with native artifacts, that would run on any Kubernetes cluster.
 
+Two ways of doing this are implemented, called modes. `split` runs on Isabel's interLink 0.6.1 and is described in sections 2 to 6. `reverse` runs on interLink 0.6.3 and is described in section 7. Both run the same workflows and tests, and `deploy/deucalion/k8s-side.sh mode split|reverse` switches between them ([HOW_TO_RUN.md](HOW_TO_RUN.md)).
+
 ## 2. The idea
 
 An Argo pod has three containers. `init` downloads the input artifacts, `main` runs the user's command, and `wait` uploads the output artifacts and reports to Kubernetes. Only `init` and `wait` need the network, and they talk to `main` only through files under `/var/run/argo` and the pod's emptyDirs. `wait` learns that `main` has ended by polling a file, not through file notifications, so this also works across two machines. The split executor therefore runs `init` and `wait` on the login node and only `main` on the compute node, with the shared file system (`/projects`) between them. Nothing in Argo or interLink is modified.
@@ -57,7 +59,7 @@ The HPC side needs only bash, coreutils, grep, sed, awk, curl, openssl, Slurm, A
 
 ## 5. Results
 
-All results come from the testbed (`../testbed`), a small copy of Deucalion on Lima virtual machines with Slurm 23.11.4, Apptainer, a shared NFS file system, an offline compute node, and a login node that cannot connect to the Kubernetes side. The tests are TC00 (one step with an input and an output artifact) and Isabel's tests TC01 to TC10 rewritten as plain Argo workflows (`tests/argo-native/`), except TC08, which tests per-user isolation and is left for later. Every result is checked in Argo and in the Global Storage (`tests/argo-native/checks.tsv`).
+All results come from the testbed (`testbed/`), a small copy of Deucalion on Lima virtual machines with Slurm 23.11.4, Apptainer, a shared NFS file system, an offline compute node, and a login node that cannot connect to the Kubernetes side. The tests are TC00 (one step with an input and an output artifact) and Isabel's tests TC01 to TC10 rewritten as plain Argo workflows (`tests/argo-native/`), except TC08, which tests per-user isolation and is left for later. Every result is checked in Argo and in the Global Storage (`tests/argo-native/checks.tsv`).
 
 | Run | Date | Result |
 |---|---|---|
@@ -70,9 +72,63 @@ In both runs, `main` ran on the compute node for every pod and `init` and `wait`
 
 Images must be listed and pulled by hand on the login node, so a workflow cannot yet name any image it likes. Only x86 partitions work, because `init` copies the login node's `argoexec` into the pod and Deucalion's login nodes are x86. All pipeline jobs share one Deucalion account, and each job folder keeps the artifact keys and the pod's service-account token until it is deleted. Every byte of data goes through the login node, and an intermediate artifact makes a round trip through the Global Storage even when the next step runs on the same file system. `init` and `wait` live on the login node for the whole job, so a reboot of that node loses running pods, and many parallel steps mean many processes there. The relay's ports listen on `127.0.0.1` of a shared login node, where other users could reach them. The wrappers depend on the exact job script of interLink 0.6.1, on `squeue`'s output format and on Slurm's `--hold`, so an upgrade could break them; reporting the `subPath` and `1:0` issues upstream and making the split a plugin feature would remove most of this coupling.
 
-## 7. Next: interLink 0.6.3 without the split
+## 7. The reverse mode: interLink 0.6.3 without the split
 
-CNES does not want to maintain wrapper scripts. interLink 0.6.3, released on 16 Nov 2026, adds a reverse tunnel to its ssh shadow (PR #577): a pod running on a compute node opens connections back into the cluster, to the Kubernetes API and the Global Storage, through the login node, using `srun --overlap` and an sshd started inside the job where the site allows nothing else. With it the standard Argo executor can run whole on the compute node, so the split is no longer needed. The Slurm plugin 0.6.3 also fixes the `1:0` false successes (#169), so the `squeue` wrapper is not needed either.
+CNES does not want to maintain wrapper scripts. interLink 0.6.3, released on 16 Nov 2026, adds a reverse tunnel to its SSH shadow (PR #577): a pod running on a compute node opens connections back into the cluster, to the Kubernetes API and the Global Storage, through the login node, using `srun --overlap` and an sshd started inside the job where the site allows nothing else. With it the standard Argo executor runs whole on the compute node, so the split is no longer needed. The Slurm plugin 0.6.3 also fixes the `1:0` false successes (#169), so the `squeue` wrapper is not needed either, and `scancel` has nothing left to stop.
 
-One gap remains: the plugin still ignores `subPath` on emptyDir volumes, which Argo uses for every input artifact. `setup/hpc/subpath-fix/` keeps only that fix, and `experiments/reverse-tunnel/upstream/` has the plugin patch to propose; once it is released, no wrapper is left. The experiment that tests this on the testbed, and what to compare with the split executor, is in [experiments/reverse-tunnel/README.md](experiments/reverse-tunnel/README.md). It has not been run yet.
+### 7.1 How one pod runs
+
+The plugin submits the whole pod as one Slurm job, with `init`, `main` and `wait` in it, as on any Kubernetes node. Before the containers start, the job starts a small relay (`python3`) that holds a loopback address for the pod and accepts only the job's user, and maps the names the pod asked for to that address in the containers' `/etc/hosts`. On Ulisses, interLink starts a shadow pod for the offloaded pod. The shadow logs in to the login node over SSH, finds the job with `squeue --me`, and runs `srun --overlap` into the job's allocation to start an sshd there as the job's user, over `srun`'s standard input and output. Through that sshd it binds each forward with `ssh -R` as a Unix socket in the pod's folder under `SocketDirRoot`, behind the relay, and connects each one to the real endpoint inside the cluster. Nothing on the compute node connects outwards, nothing is installed on the site, and the login node's sshd is never asked to forward.
+
+### 7.2 What is configuration, and what is still ours
+
+Almost everything is configuration:
+
+- **Virtual kubelet:** `Network.SSH` with `Reverse` (`NodeExec: srun`, `Sshd: userspace`, the combination that needs neither SSH into compute nodes nor forwarding on the site's sshd), the SSH key as a Secret and the login node's host keys as a ConfigMap. The API address given to offloaded containers is `kubernetes.default.svc.cluster.local:6443`, because an unprivileged sshd cannot bind port 443.
+- **Argo `workflowDefaults`:** the pod annotation `interlink.eu/reverse-forwards`, so the workflows stay plain Argo.
+- **Slurm plugin:** `SocketDirRoot`, `CommandPrefix: ""` (Isabel's data wrapper off), `--no-eval --contain`, pre-pulled images (`ImagePrefix`), and a fixed node capacity (`ResourceScriptPath`), because the plugin otherwise reports the free memory it sees, which fell below one pod's request on the testbed.
+- **Kubernetes:** the Global Storage under a Service name, because the tunnel maps names, not IP addresses.
+
+One wrapper is still ours, `setup/hpc/subpath-fix/sbatch`. The plugin still ignores `subPath` on emptyDir volumes, which Argo uses for every input artifact. `experiments/reverse-tunnel/upstream/` has the plugin patch to propose, and once it is released no wrapper is left. `deploy/deucalion` makes all of these changes with a backup and undoes them (`k8s-side.sh mode reverse`, `restore`).
+
+### 7.3 Results
+
+The mode was first tried on the testbed with `experiments/reverse-tunnel/` (its README lists the three problems found and fixed), and then run with the Deucalion scripts on the testbed's settings, exactly as in [HOW_TO_RUN.md](HOW_TO_RUN.md) section 1.4. The same tests and checks are used as for `split` (section 5).
+
+| Run | Date | Result |
+|---|---|---|
+| `20261117-011154`, `-022804`, `-024031` | 17 Nov 2026 | All tests pass across the three runs of the experiment, after its fixes |
+| `20261117-215316-reverse` | 17 Nov 2026 | All tests pass in one run, 30 of 30 checks, through the Deucalion scripts (`k8s-side.sh mode reverse`) |
+
+In this mode `init`, `main` and `wait` all run in the Slurm job on the offline compute node, so every artifact and every API call of these runs went through the tunnel; the job's log shows `interLink: reverse tunnel ready` before the containers start. Time per test, both through the Deucalion scripts on the testbed:
+
+| Test | `split` (`20261116-220707`) | `reverse` (`20261117-215316-reverse`) |
+|---|---|---|
+| TC00 | 1m02s | 1m39s |
+| TC01 | 0m34s | 1m26s |
+| TC02 | 0m30s | 1m34s |
+| TC03 | 0m34s | 1m30s |
+| TC04 | 0m35s | 1m38s |
+| TC05 | 1m21s | 4m26s |
+| TC06 | 2m25s | 3m30s |
+| TC07 | 1m31s | 5m28s |
+| TC09 | 1m02s | 3m38s |
+| TC10 | 3m07s | 7m37s |
+
+`reverse` is slower because every pod waits for its tunnel before its containers start: the shadow pod starts, logs in, waits for the job to run and starts the sshd in it. That took about 80 seconds per pod on the testbed, so it adds about a minute to every step. On Deucalion the queue of `normal-x86` comes on top, in both modes.
+
+### 7.4 Compared with `split`
+
+| | `split` | `reverse` |
+|---|---|---|
+| interLink | 0.6.1 | 0.6.3 |
+| Code we maintain | 3 wrappers + relay | 1 wrapper (subPath), until upstream |
+| Where `init` and `wait` run | login node | compute node, in the job |
+| What the site must allow | SSH to the login node | SSH to the login node, `srun --overlap` into one's own jobs, `python3` and `sshd` on the compute nodes |
+| Data path | login node ↔ Global Storage | compute node ↔ Slurm ↔ login node ↔ shadow pod on Ulisses ↔ Global Storage |
+| Time per pod (testbed) | about 30 s for a short step | about 1.5 min for a short step, mostly the tunnel |
+
+### 7.5 Known limits
+
+Every pod pays for its tunnel before it starts. The throughput of the `srun` carrier (Slurm's I/O forwarding) has not been measured with large artifacts yet. The shadow logs in with an SSH private key kept in a Secret, which interLink copies into every shadow namespace; interLink's documentation advises a key for the tunnel only, restricted on the site, and the trial scripts delete the Secret and its copies when the mode is switched off. The site must allow `srun --overlap` and have `python3` and `sshd` on the compute nodes. The Global Storage is reached through a Service name, so over HTTPS its certificate would have to be valid for that name (Isabel's MinIO uses plain HTTP). As in `split`, images must be pulled beforehand on the login node, and all jobs share one Deucalion account.
 

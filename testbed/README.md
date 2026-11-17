@@ -13,11 +13,15 @@ Pipeline Runner, so experiments that need an HPC system can run locally and repe
 - Apple Silicon Mac, Lima >= 1.0 (`limactl --version`; Colima installs it, otherwise `brew install lima`).
 - Free disk: about 20 GB (Stage A) or 35 GB (Stage B).
 - Free RAM: about 2.5 GB (Stage A) or 6.5 GB (Stage B). Stop Colima first (`colima stop`).
-- Isabel's repository next to this folder (`../lisa-pipeline-runner`) for Stage B.
+- Isabel's repository next to the repository that holds this folder (`../../lisa-pipeline-runner`
+  from here) for Stage B.
 
 ## Usage
 
-Run `make` to list the shortcuts. The main ones:
+The `Makefile` at the root of the repository is the main entry point: `make init-old` and
+`make init-new` build the VMs if needed and switch them between the two modes, and `make test` runs
+the tests of the mode that is on (see `../HOW_TO_RUN.md`, section 1). The `makefile` in this folder
+has the testbed's own targets; run `make` here to list them. The main ones:
 
 ```sh
 make vm-build          # Stage A (first time about 15 minutes)
@@ -100,7 +104,7 @@ lists every job that failed on the HPC side while its pod was reported `Succeede
 test with the `dev` baseline (TC02 and TC08 contain steps that are meant to fail), and classifies
 every Slurm job from its `job.out`: `OK`, `IMAGE_PULL`, `DATA_SYNC_IN`, `DATA_SYNC_OUT`,
 `SYNC_OUT_SILENT` (upload failed but `mc` exited 0), `TASK_ERROR` or `OTHER`. The findings are in
-the git history of `../lisa-pipeline-runner_ze/APPROACH.md` (section 2 of the version before 16 Nov 2026).
+the git history of `../APPROACH.md` (section 2 of the version before 16 Nov 2026).
 
 Expected if the analysis is right: everything as in her thesis in `dev`; in `normal`, input syncs
 fail with `DATA_SYNC_IN` and TC01 with `IMAGE_PULL`; in `normal-images`, TC01 passes but every
@@ -119,11 +123,11 @@ node reaches. `make test-check` verifies it (U5-U7, and U1 for MinIO).
 ## Test T1
 
 Plain Argo workflows on the offline compute node, with the split executor
-(`../lisa-pipeline-runner_ze/setup/hpc/split-executor`):
+(`../setup/hpc/split-executor`):
 
 - TC00: one container template with a native input and output artifact.
 - TC01-TC07, TC09, TC10: Isabel's tests rewritten as plain Argo workflows
-  (`../lisa-pipeline-runner_ze/tests/argo-native`: her six compute modules as a WorkflowTemplate with
+  (`../tests/argo-native`: her six compute modules as a WorkflowTemplate with
   native artifacts). TC08 is not ported; see that folder's README.
 
 The workflows are submitted as written: no sync modules, nothing about the HPC side. The platform
@@ -154,9 +158,10 @@ interLink as is (the "before").
 - **One compute node, no InfiniBand, no accounting database.** The testbed shows whether
   mechanisms work, not how fast they are.
 - **MinIO on the same VM as Kubernetes** (separate VM in the FEUP deployment).
-- **Calico's default pod range (192.168.0.0/16) overlaps the VM network (192.168.104.0/24)**, as
-  her script does not set one. It does not affect the prototype (only host processes talk to the
-  HPC side), but it is worth knowing if pods ever need to reach the login node.
+- **Calico's default pod range (192.168.0.0/16) would overlap the VM network (192.168.104.0/24)**,
+  as her script does not set one, so Calico picked 172.16.0.0/16 instead, with outgoing NAT. Pods
+  reach the login node through that NAT, which the reverse tunnel's shadow pods need (checked on
+  17 Nov 2026).
 
 ## Checks (`make test-check`)
 
