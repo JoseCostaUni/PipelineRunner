@@ -1,6 +1,7 @@
 # Run on Ulisses
 
-The commands, in order. What each one does: [HOW_TO_RUN.md](HOW_TO_RUN.md), section 2.
+The commands, in order. What each one does: [HOW_TO_RUN.md](HOW_TO_RUN.md), section 2. Every
+`make` target is listed at the top of `deploy/deucalion/Makefile`.
 
 ## 1. Mac (FEUP VPN on)
 
@@ -17,89 +18,59 @@ Host ulisses
 cd ~/Documents/Dissertation/repositories/lisa-pipeline-runner_ze
 git archive --prefix=lisa-pipeline-runner_ze/ -o ~/lpr.tgz HEAD   # what is committed
 scp ~/lpr.tgz ulisses:
-ssh ulisses                     # the first login may ask you to set a password
+ssh ulisses
 ```
 
-## 2. Ulisses: set up
+## 2. Ulisses: set up and check
 
 ```sh
 screen -S trial                 # detach: Ctrl+A then D; back: ssh ulisses, screen -R trial
-sudo -i                         # k8s-side.sh runs as root
+sudo -i                         # the scripts run as root
 tar -xzf ~jcosta/lpr.tgz -C /opt
 cd /opt/lisa-pipeline-runner_ze/deploy/deucalion
-cp deucalion.env.example deucalion.env && chmod 600 deucalion.env
-vi deucalion.env                # GS_ACCESS_KEY, GS_SECRET_KEY (Isabel's MinIO keys)
-source deucalion.env
-scp -i "$SSH_KEY" -r /opt/lisa-pipeline-runner_ze "$HPC_USER@$HPC_LOGIN_HOST:$HPC_PROJECT_ROOT/"
+make env && vi deucalion.env    # GS_ACCESS_KEY, GS_SECRET_KEY (Isabel's MinIO keys)
+make tools                      # argo and mc, only if missing
+make sync                       # copy to the login node; prints: none
+make check                      # Ulisses, login node, one compute node; kept in results/
 ```
 
-## 3. Checks
+Fix every `FAIL` first. After editing `deucalion.env`, run `make sync` again.
+
+- Skip `reverse` if `make check` prints `python3: NOT found`, `sshd: NOT found` or `srun --overlap ... FAILED`.
+- Skip `split` if it prints `Global Storage ... not reachable from here`.
+
+## 3. `reverse`
 
 ```sh
-mkdir -p results && ./k8s-side.sh check | tee results/check-k8s.txt
-ssh -i "$SSH_KEY" "$HPC_USER@$HPC_LOGIN_HOST"
+make reverse                    # builds interLink 0.6.3 the first time (a few minutes)
+make test T=00
+make test
 ```
 
-On the login node:
+If a step of `make reverse` fails, fix it and run it again.
+
+## 4. `split`
 
 ```sh
-cd /projects/EEHPC-DEV-2026D02-075/lisa-pipeline-runner/lisa-pipeline-runner_ze/deploy/deucalion
-./hpc-side.sh check | tee check-hpc.txt
-./hpc-side.sh probe-compute | tee probe-compute.txt
-exit
+make clean split
+make test T=00
+make test
 ```
 
-Fix every `FAIL` first. After editing `deucalion.env`, copy it again:
+## 5. Put everything back
 
 ```sh
-scp -i "$SSH_KEY" deucalion.env "$HPC_USER@$HPC_LOGIN_HOST:$HPC_REPO_DIR/deploy/deucalion/" && source deucalion.env
+make restore                    # ends with both sides: none
 ```
 
-- Skip `reverse` if `probe-compute` prints `python3: NOT found`, `sshd: NOT found` or `srun --overlap ... FAILED`.
-- Skip `split` if `hpc-side.sh check` prints `Global Storage ... not reachable from here`.
-
-## 4. `reverse`
+## 6. Take the results home
 
 ```sh
-./k8s-side.sh install           # once, a few minutes: builds interLink 0.6.3
-./k8s-side.sh mode reverse      # if a step fails: fix it, run the same command again
-./k8s-side.sh test 00
-./k8s-side.sh test
-```
-
-## 5. `split`
-
-```sh
-./k8s-side.sh clean
-./k8s-side.sh mode split
-./k8s-side.sh test 00
-./k8s-side.sh test
-```
-
-## 6. Put everything back
-
-```sh
-./k8s-side.sh clean
-./k8s-side.sh restore
-./k8s-side.sh status            # both sides: none
-```
-
-## 7. Take the results home
-
-On Ulisses:
-
-```sh
-scp -i "$SSH_KEY" "$HPC_USER@$HPC_LOGIN_HOST:$HPC_REPO_DIR/deploy/deucalion/*.txt" results/
-tar -czf ~jcosta/results.tgz results && chown jcosta ~jcosta/results.tgz
-```
-
-On the Mac:
-
-```sh
-scp ulisses:results.tgz ~/Documents/Dissertation/
+make results                    # on Ulisses: results.tgz in your home
+scp ulisses:results.tgz ~/Documents/Dissertation/     # on the Mac
 ```
 
 ## If a test fails
 
-`results/<time>-<mode>/summary.txt`, then `./k8s-side.sh diag` in `reverse`. More in
-[HOW_TO_RUN.md](HOW_TO_RUN.md), section 3.
+`results/<time>-<mode>/summary.txt`, `make diag` in `reverse`, and `make login` for a shell on the
+login node (the job folders). More in [HOW_TO_RUN.md](HOW_TO_RUN.md), section 3.
