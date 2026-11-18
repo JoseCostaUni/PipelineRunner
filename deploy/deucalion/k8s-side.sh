@@ -237,6 +237,13 @@ case "${1:-}:${2:-}" in
     if [ "$want" != reverse ]; then
       say "== split (interLink 0.6.1 + split executor)"
       [ -f "$RELAYBIN" ] && pass "relay binary $RELAYBIN" || fail "no $RELAYBIN"
+      # Offloaded containers (direct) and the relay agent (relay) call the API at K8S_API_HOST, so the
+      # API server's certificate must be valid for that address.
+      code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 --cacert /etc/kubernetes/pki/ca.crt "https://$K8S_API_HOST:$K8S_API_PORT/version")"
+      case "$code" in
+        200|401|403) pass "Kubernetes API at $K8S_API_HOST:$K8S_API_PORT, certificate valid for that address" ;;
+        *) fail "no Kubernetes API with a valid certificate at $K8S_API_HOST:$K8S_API_PORT: set K8S_API_HOST to the address in $(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')" ;;
+      esac
       grep -q '^KubernetesApiAddr' "$VKC" 2>/dev/null && info "virtual kubelet: $(grep -E '^KubernetesApi(Addr|Port)' "$VKC" | tr '\n' ' ')" \
         || info "virtual kubelet: default API address"
     fi
