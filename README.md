@@ -6,10 +6,10 @@ A setup and testing framework for the LISA pipeline infrastructure, supporting K
 
 This repository provides automated setup scripts and test utilities for deploying and validating the LISA pipeline across different infrastructure environments. It is a fork of Isabel Moutinho's FEUP prototype that runs plain Argo workflows, with native artifacts, on HPC compute nodes that have no network, in two ways (modes). Neither Argo nor interLink is modified in either.
 
-- **`split`** (interLink 0.6.1, Isabel's deployment as it is): Argo's `init` and `wait` containers run on the HPC login node, and only `main` runs in the Slurm job. Three wrapper scripts replace the Slurm commands that the interLink sidecar calls.
+- **`split`** (interLink 0.6.1): Argo's `init` and `wait` containers run on the HPC login node, and only `main` runs in the Slurm job. Three wrapper scripts replace the Slurm commands that the interLink sidecar calls.
 - **`reverse`** (interLink 0.6.3): the whole pod runs in the Slurm job, and reaches the Global Storage and the Kubernetes API through the reverse tunnel of interLink's SSH shadow. One wrapper is left, for a gap in the Slurm plugin (`subPath` on emptyDirs).
 
-One command switches between them, on the testbed (`make init-old` / `make init-new`) and on Deucalion (`./k8s-side.sh mode split|reverse`).
+One command switches between them, on the testbed (`make init-old` / `make init-new`) and on Deucalion (`make split` / `make reverse` in `deploy/deucalion`, steps in [RUN_ON_ULISSES.md](RUN_ON_ULISSES.md)). Why things are the way they are, change by change: [CHANGELOG.md](CHANGELOG.md).
 
 ## How to run
 

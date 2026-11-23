@@ -4,7 +4,7 @@
 
 On Deucalion, the login nodes reach the internet, but the compute nodes of the `normal-*` partitions do not. Anything that moves data between the Global Storage and the HPC side, or reports results to Kubernetes, therefore has to run where there is network, while the computation itself runs on a compute node. Scientists should still be able to write ordinary Argo workflows, with native artifacts, that would run on any Kubernetes cluster.
 
-Two ways of doing this are implemented, called modes. `split` runs on Isabel's interLink 0.6.1 and is described in sections 2 to 6. `reverse` runs on interLink 0.6.3 and is described in section 7. Both run the same workflows and tests, and `deploy/deucalion/k8s-side.sh mode split|reverse` switches between them ([HOW_TO_RUN.md](HOW_TO_RUN.md)).
+Two ways of doing this are implemented, called modes. `split` runs on interLink 0.6.1 and is described in sections 2 to 6. `reverse` runs on interLink 0.6.3 and is described in section 7. Both run the same workflows and tests, and `deploy/deucalion/k8s-side.sh mode split|reverse` switches between them ([HOW_TO_RUN.md](HOW_TO_RUN.md)).
 
 ## 2. The idea
 
