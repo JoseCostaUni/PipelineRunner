@@ -12,6 +12,70 @@ three Lima VMs.
 
 ---
 
+## 2026-11-24: a Global Storage inside the cluster; `sync` sends only what the login node needs
+
+**Context.** Isabel's MinIO did not answer from anywhere (entry below), which blocks both modes. The
+site checks showed that Deucalion has everything `reverse` needs. In `reverse` only Ulisses has to
+reach the Global Storage, since the jobs reach it through the tunnel.
+
+**What changed** (`deploy/deucalion/`):
+- **`GS_ENDPOINT=cluster` and `k8s-side.sh minio on|off`** (`make minio`, and `make setup` when
+  that setting is on):
+  - a MinIO Deployment `lisa-minio` in `ARGO_NAMESPACE` behind the Service `GS_SERVICE`;
+  - its root credentials are `GS_ACCESS_KEY`/`GS_SECRET_KEY`, kept in a Secret;
+  - its data is in an `emptyDir` of at most 20 Gi;
+  - the image is `pgsty/minio` at a fixed release.
+
+  Design choices:
+  - Ulisses reaches it at the Service's cluster IP, resolved at every run, and the jobs of
+    `reverse` under the Service's name through the tunnel, as for an external endpoint.
+  - The selector-less Service that `gs_service` would create is skipped, because the MinIO's own
+    Service already has that name.
+  - `check` now fails `split` with this setting, since the login node cannot reach the cluster.
+
+  *Why these choices:*
+  - The `pgsty` fork is used because MinIO stopped publishing free images in October 2025. The
+    testbed already ran it with the same arguments (`server /data --console-address :9001`).
+  - The data goes in an `emptyDir` because the cluster has no StorageClass, and the tests put back
+    their own data before every run anyway.
+  - Nothing is exposed outside the cluster.
+
+  *Cost:* the Global Storage now lives on the same machine as Kubernetes, unlike the architecture
+  it stands in for. Its data disappears when the pod restarts. It's a stand-in for testing
+  `reverse`, not a design decision about where LISA's data lives.
+- **`sync` copies only `deploy/deucalion` and `setup/hpc` (29 files), and no settings file except
+  its own stripped copy.**
+  - On Ulisses, the runbook's `mv deucalion.env deucalion.env.old` had created a second settings
+    file, with the keys. `sync` copied it to the login node because it excluded only the current
+    file by name.
+  - All `*.env*` files are now excluded, and any left over on the login node are removed.
+- **`hpc-side.sh check` fails on a full file system** (the entry below has the evidence).
+- **`minio on` waits until the Service answers.** In the first try, the pod was ready but its
+  Service refused connections for a moment, because kube-proxy had not routed it yet. The
+  following `mc` step failed on that.
+- **`clean` waits until no pod is left on the virtual node.** *Why:* `make restore` and
+  `make clean split` stop interLink right after `clean`. In the first try that came before interLink
+  had deleted the pod, and its job folder, with keys and tokens, stayed on the login node.
+
+**Evidence** (testbed, as the non-root user, `GS_ENDPOINT=cluster`, `testbed-cluster.env`):
+- **First try:** `make minio`, `sync`, `reverse` and TC00 passed (`20261123-234554-reverse`,
+  1 min 43 s). `check` failed `split` with the intended message. `restore` and `minio-off` cleaned
+  up, but one job folder was left, which led to the `clean` change.
+- **Second try**, with both fixes: the MinIO answered at once, and TC00 passed
+  (`20261123-234928-reverse`, 1 min 49 s). `clean` reported no pod left.
+- **An empty job folder still remained.** The Slurm plugin 0.6.3's DeletePod handler panics: a nil
+  pointer in `deleteContainer`, at `prepare.go:1482` in the release binary, once per delete call.
+  - Go's HTTP server recovers the panic per request, so the sidecar keeps running and the pod is
+    deleted. The folder's contents (keys, tokens) were gone; only the empty directory stayed.
+  - The tag `0.6.3`'s source has a guard for exactly this case. Its `deleteContainer` says that
+    "dereferencing the nil `*JidStruct` panics the whole request handler", and it sits at line
+    1829, not 1482. So the published binary appears to be built from an earlier commit than the
+    tag. That is an inference from the line numbers.
+  - *Open:* build the plugin from its tag, as is done for interLink, and report the mismatch
+    upstream.
+
+---
+
 ## 2026-11-23 (later): first `make setup` on Ulisses; fail fast instead of hanging
 
 **What happened** on the first run on Ulisses:

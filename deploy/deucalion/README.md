@@ -69,6 +69,7 @@ Both modes:
 | Deucalion, `HPC_PROJECT_ROOT/images/` | pulled images | delete the folder |
 | Deucalion, job folders of the trial | data, artifact keys and tokens of each pod | `make clean` |
 | Global Storage | bucket `GS_BUCKET`, test data under `users/` and `t1/` (reset before every test run) | `mc rm` |
+| Ulisses, namespace `ARGO_NAMESPACE`, with `GS_ENDPOINT=cluster` | Deployment `lisa-minio`, Service `GS_SERVICE`, Secret `lisa-minio-root`: a MinIO as the Global Storage, data in an `emptyDir` (lost when the pod restarts); `reverse` only | `make minio-off` (`make restore` leaves it) |
 
 `split`:
 

@@ -1,8 +1,9 @@
 # Deucalion trial from Ulisses, as your own user (no sudo), in this folder. Steps: ../../RUN_ON_ULISSES.md
 #   make env              first time: deucalion.env from the example (then fill it in)
-#   make setup            once: Argo (if the cluster has none), argo + mc, interLink 0.6.1 and 0.6.3,
-#                         this repository on the login node, the sidecar there
-#   make sync             copy this repository and the settings to the login node again (after a change)
+#   make setup            once: Argo (if the cluster has none), the MinIO (GS_ENDPOINT=cluster), argo + mc,
+#                         interLink 0.6.1 and 0.6.3, the scripts on the login node, the sidecar there
+#   make sync             copy the scripts and the settings to the login node again (after a change)
+#   make minio, minio-off with GS_ENDPOINT=cluster: a MinIO in the cluster as the Global Storage (reverse only)
 #   make check            read-only checks of both sides and a compute node, kept in results/
 #   make reverse | split  switch both sides to that mode
 #   make test [T=00]      run the tests (default: all) in the mode that is on
@@ -16,7 +17,7 @@ SHELL := /bin/bash
 ENV_FILE ?= deucalion.env
 K := SPLIT_ENV=$(abspath $(ENV_FILE)) ./k8s-side.sh
 
-.PHONY: env setup sync check reverse split test status diag clean restore results login
+.PHONY: env setup sync check reverse split test status diag clean restore results login minio minio-off
 
 env:
 	[ -f $(ENV_FILE) ] || { cp deucalion.env.example $(ENV_FILE) && chmod 600 $(ENV_FILE); }
@@ -24,6 +25,7 @@ env:
 
 setup:
 	$(K) argo
+	if grep -q '^GS_ENDPOINT=cluster' $(ENV_FILE); then $(K) minio on; fi
 	$(K) tools
 	$(K) install
 	$(K) sync
@@ -57,3 +59,9 @@ results:
 
 login:
 	$(K) login
+
+minio:
+	$(K) minio on
+
+minio-off:
+	$(K) minio off

@@ -10,10 +10,13 @@ cluster-admin kubeconfig) and `jcosta.up` on Deucalion. What each step does and 
 - **Kubernetes:** on Ulisses, `kubectl get nodes` lists the node `ulisses`.
 - **Deucalion from Ulisses:** `ssh -i ~/.ssh/id_ed25519 jcosta.up@ln01.deucalion.macc.fccn.pt hostname`
   works. New keys can take hours to be accepted.
-- **Global Storage:** Isabel's MinIO keys, for `GS_ACCESS_KEY` and `GS_SECRET_KEY`.
-- **A folder on Deucalion** for `HPC_PROJECT_ROOT`, at most 59 characters. Isabel suggests the
-  HPCvLAB shared folder. Job folders hold the MinIO keys and service-account tokens while a pod
-  runs, so whoever can read that folder can read them.
+- **Global Storage:**
+  - **Isabel's MinIO**, both modes: its address and keys. It didn't answer on 23 Nov 2026.
+  - **`GS_ENDPOINT=cluster`**, `reverse` only: a MinIO of ours inside the cluster. Choose its keys
+    yourself: `GS_ACCESS_KEY=lisa`, `GS_SECRET_KEY=$(openssl rand -hex 16)`.
+- **A folder on Deucalion** for `HPC_PROJECT_ROOT`, at most 59 characters:
+  `/home/jcosta.up/lisa`. `/projects` was full in Nov 2026. The folder is private, which matters
+  because job folders hold the MinIO keys and service-account tokens while a pod runs.
 - **Gustavo:** the cluster is shared. `make setup` installs Argo in namespace `argo` if it isn't
   there yet. While offload is on, every workflow of that Argo goes to your virtual node.
 
@@ -41,8 +44,11 @@ screen -S trial                   # detach: Ctrl+A then D; back: ssh ulisses, sc
 cd ~/PipelineRunner && git pull
 cd deploy/deucalion
 mv deucalion.env deucalion.env.old 2>/dev/null   # only if you have one from before 23 Nov
-make env && vi deucalion.env      # HPC_PROJECT_ROOT, GS_ACCESS_KEY, GS_SECRET_KEY; check the rest
+make env && vi deucalion.env      # HPC_PROJECT_ROOT, GS_ENDPOINT, GS_ACCESS_KEY, GS_SECRET_KEY; check the rest
 ```
+
+With `GS_ENDPOINT=cluster`, `make setup` also starts the MinIO (`make minio` alone does too), and
+`make check` fails `split`, which can't use it.
 
 ## 3. Set up and check (once)
 

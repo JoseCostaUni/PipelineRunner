@@ -23,6 +23,8 @@
 #                         direct = K8S_API_HOST, relay = the relay on the login node
 #   api reverse           reverse: start interLink 0.6.3 with the reverse tunnel of its ssh shadow
 #   api off               stop interLink here; reverse: delete the shadow's credentials and Service
+#   minio on|off          with GS_ENDPOINT=cluster: a MinIO inside the cluster as the Global Storage (the
+#                         Service GS_SERVICE in ARGO_NAMESPACE); only reverse can use it
 #   artifacts             make the Global Storage Argo's default artifact repository in ARGO_NAMESPACE
 #                         (as the mode that is on needs it), apply the test module library, upload the
 #                         test datasets (backs up what exists)
@@ -97,6 +99,15 @@ RT_KNOWN=trial-hpc-known-hosts   # ConfigMap: the login node's host keys
 # The tunnel maps names, not IP addresses: the job reaches the Global Storage through a Service name,
 # and the Kubernetes API on a port an unprivileged sshd can bind.
 GS_SERVICE="${GS_SERVICE:-global-storage}"
+# GS_ENDPOINT=cluster: the Global Storage is a MinIO of ours inside the cluster ('minio on'), the
+# Service GS_SERVICE in ARGO_NAMESPACE. Ulisses reaches it at the Service's cluster IP, the jobs of
+# reverse through the tunnel under its name. The login node cannot reach it, so split cannot use it.
+GS_IN_CLUSTER=false
+MINIO_IMAGE="${MINIO_IMAGE:-docker.io/pgsty/minio:RELEASE.2026-08-04T00-00-00Z}"
+if [ "$GS_ENDPOINT" = cluster ]; then
+  GS_IN_CLUSTER=true
+  GS_ENDPOINT="$(kubectl -n "$NS" get svc "$GS_SERVICE" -o jsonpath='{.spec.clusterIP}' 2>/dev/null):9000"
+fi
 GS_HOST="${GS_ENDPOINT%:*}"
 case "$GS_ENDPOINT" in *:*) GS_PORT="${GS_ENDPOINT##*:}";; *) [ "${GS_INSECURE:-true}" = true ] && GS_PORT=80 || GS_PORT=443;; esac
 GS_FQDN="$GS_SERVICE.$NS.svc.cluster.local"
@@ -110,6 +121,7 @@ info() { printf 'INFO  %s\n' "$*"; }
 # check that something answers there first, and give up after 30 s.
 gs() {
   local scheme=https; [ "${GS_INSECURE:-true}" = true ] && scheme=http
+  if [ "$GS_IN_CLUSTER" = true ] && [ "$GS_HOST" = "" ]; then say "ERROR: GS_ENDPOINT=cluster but there is no MinIO yet: run './k8s-side.sh minio on'"; return 1; fi
   curl -s -m 8 -o /dev/null "$scheme://$GS_ENDPOINT/minio/health/live" \
     || { say "ERROR: the Global Storage $GS_ENDPOINT does not answer from $(hostname): is it running, is GS_ENDPOINT right?"; return 1; }
   timeout 30 mc alias set gs "$scheme://$GS_ENDPOINT" "$GS_ACCESS_KEY" "$GS_SECRET_KEY" >/dev/null \
@@ -241,6 +253,7 @@ il_down() { local n; for n in il-vk il-api il-tunnel relay-agent relay-tunnel; d
 
 gs_service() { # on|off: the Global Storage under a Service name in ARGO_NAMESPACE, for the tunnel
   local mine
+  [ "$GS_IN_CLUSTER" = true ] && return 0   # the MinIO in the cluster is that Service already
   if [ "$1" = off ]; then
     kubectl -n "$NS" delete svc,endpointslice -l "app.kubernetes.io/managed-by=$OWNER" --ignore-not-found >/dev/null
     return
@@ -366,6 +379,7 @@ case "${1:-}:${2:-}" in
       esac
       port_free "$RELAY_CTL_PORT" || proc_up relay-tunnel && pass "port $RELAY_CTL_PORT free here (relay tunnel)" \
         || fail "port $RELAY_CTL_PORT already in use on this machine: pick other RELAY_*_PORT values"
+      [ "$GS_IN_CLUSTER" = true ] && fail "GS_ENDPOINT=cluster: the login node cannot reach a MinIO inside the cluster, so split cannot run with it"
     fi
     if [ "$want" != split ]; then
       say "== reverse (interLink $REVERSE_IL_VERSION + reverse tunnel)"
@@ -391,6 +405,7 @@ case "${1:-}:${2:-}" in
   status:)
     say "== Ulisses: mode $(k8s_mode), interLink $(il_version), $NODE Ready=$(node_ready)"
     for p in $PROCS; do proc_up "$p" && say "   $p: running (log $LOGD/$p.log)"; done
+    [ "$GS_IN_CLUSTER" = true ] && say "   Global Storage: MinIO in the cluster, $(kubectl -n "$NS" get deploy lisa-minio -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo 0)/1 ready at $GS_ENDPOINT"
     say "   artifact repository endpoint: $(kubectl -n "$NS" get cm artifact-repositories -o jsonpath='{.data.default-v1}' 2>/dev/null | sed -n 's/^ *endpoint: *//p')"
     wd="$(kubectl -n argo get cm "$CM" -o json 2>/dev/null | jq -r '.data.workflowDefaults // ""')"
     case "$wd" in *"$NODE"*) o=on;; *) o=off;; esac
@@ -547,19 +562,78 @@ YAML
     # hpc-side.sh does not use them, and HPC_PROJECT_ROOT may be a folder other people can read.
     abs_root || exit 1
     envname="$(basename "$ENV_FILE")"
-    tar -C "$ZE" --exclude=./deploy/deucalion/results --exclude=./.git --exclude="./deploy/deucalion/$envname" -cz . \
-      | ssh "${SSHO[@]}" "$HPC_USER@$HPC_LOGIN_HOST" "mkdir -p '$HPC_REPO_DIR' && tar -xzm -C '$HPC_REPO_DIR'" \
+    # Only what hpc-side.sh uses, and no settings file: a copy such as deucalion.env.old holds the keys.
+    tar -C "$ZE" --exclude=./deploy/deucalion/results --exclude='./deploy/deucalion/*.env*' -cz ./deploy/deucalion ./setup/hpc \
+      | ssh "${SSHO[@]}" "$HPC_USER@$HPC_LOGIN_HOST" "mkdir -p '$HPC_REPO_DIR' && tar -xzm -C '$HPC_REPO_DIR' && rm -f '$HPC_DIR'/*.env.*" \
       || { say "ERROR: copy to $HPC_USER@$HPC_LOGIN_HOST:$HPC_REPO_DIR failed"; exit 1; }
-    # The API address as used here (from the kubeconfig unless set): hpc-side.sh checks whether the
-    # login node reaches it.
+    # The API and Global Storage addresses as used here (the API from the kubeconfig unless set):
+    # hpc-side.sh checks whether the login node reaches them.
     { grep -v -E '^GS_(ACCESS|SECRET)_KEY=' "$ENV_FILE"
-      printf '\n# added by k8s-side.sh sync\nK8S_API_HOST=%s\nK8S_API_PORT=%s\n' "$K8S_API_HOST" "$K8S_API_PORT"; } \
+      printf '\n# added by k8s-side.sh sync\nK8S_API_HOST=%s\nK8S_API_PORT=%s\n' "$K8S_API_HOST" "$K8S_API_PORT"
+      [ "$GS_IN_CLUSTER" = true ] && printf 'GS_ENDPOINT=%s   # the MinIO in the cluster\n' "$GS_ENDPOINT"; } \
       | ssh "${SSHO[@]}" "$HPC_USER@$HPC_LOGIN_HOST" "umask 077 && cat >'$HPC_DIR/$envname'" \
       || { say "ERROR: copy of the settings failed"; exit 1; }
     say "copied to $HPC_REPO_DIR on $HPC_LOGIN_HOST (settings without the Global Storage keys); login node mode: $(hpc_mode)"
     ;;
   hpc:*) shift; hpc "$@" ;;
   login:) exec ssh -t "${SSHO[@]/BatchMode=yes/BatchMode=no}" "$HPC_USER@$HPC_LOGIN_HOST" "cd '$HPC_DIR' && exec bash -l" ;;
+
+  minio:on)
+    # A Global Storage inside the cluster, for when no external one is reachable. Data in an emptyDir:
+    # the tests put back their own data before every run ('reset-data').
+    [ "$GS_IN_CLUSTER" = true ] || { say "ERROR: set GS_ENDPOINT=cluster in $(basename "$ENV_FILE") to use a MinIO in the cluster"; exit 1; }
+    [ "${#GS_ACCESS_KEY}" -ge 3 ] && [ "${#GS_SECRET_KEY}" -ge 8 ] \
+      || { say "ERROR: GS_ACCESS_KEY (3 or more characters) and GS_SECRET_KEY (8 or more) become this MinIO's credentials: set them"; exit 1; }
+    kubectl get ns "$NS" >/dev/null 2>&1 || { say "ERROR: no namespace $NS: run './k8s-side.sh argo' first"; exit 1; }
+    kubectl -n "$NS" create secret generic lisa-minio-root \
+      --from-literal=MINIO_ROOT_USER="$GS_ACCESS_KEY" --from-literal=MINIO_ROOT_PASSWORD="$GS_SECRET_KEY" --dry-run=client -o yaml \
+      | kubectl label --local -f - -o yaml "app.kubernetes.io/managed-by=$OWNER" | kubectl apply -f - >/dev/null
+    kubectl apply -f - >/dev/null <<YAML
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lisa-minio
+  namespace: $NS
+  labels: {app: lisa-minio, app.kubernetes.io/managed-by: $OWNER}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: lisa-minio}}
+  template:
+    metadata:
+      labels: {app: lisa-minio}
+    spec:
+      containers:
+      - name: minio
+        image: $MINIO_IMAGE
+        args: ["server", "/data", "--console-address", ":9001"]
+        envFrom: [{secretRef: {name: lisa-minio-root}}]
+        ports: [{containerPort: 9000}]
+        readinessProbe: {httpGet: {path: /minio/health/ready, port: 9000}, periodSeconds: 5}
+        volumeMounts: [{name: data, mountPath: /data}]
+      volumes: [{name: data, emptyDir: {sizeLimit: 20Gi}}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: $GS_SERVICE
+  namespace: $NS
+  labels: {app: lisa-minio, app.kubernetes.io/managed-by: $OWNER}
+spec:
+  selector: {app: lisa-minio}
+  ports: [{name: s3, port: 9000, targetPort: 9000}]
+YAML
+    kubectl -n "$NS" rollout status deploy/lisa-minio --timeout=300s || { say "ERROR: MinIO did not start: kubectl -n $NS describe pod -l app=lisa-minio"; exit 1; }
+    ip="$(kubectl -n "$NS" get svc "$GS_SERVICE" -o jsonpath='{.spec.clusterIP}')"
+    say "MinIO ($MINIO_IMAGE) in $NS: $ip:9000 from Ulisses, $GS_FQDN:9000 for the jobs of reverse"
+    GS_ENDPOINT="$ip:9000"; GS_HOST="$ip"
+    # The pod is ready before kube-proxy routes the new Service: until then it refuses connections.
+    for _ in $(seq 1 30); do curl -s -m 3 -o /dev/null "http://$GS_ENDPOINT/minio/health/live" && break; sleep 2; done
+    gs && mc mb -p "gs/$GS_BUCKET" >/dev/null && say "bucket $GS_BUCKET ready"
+    ;;
+  minio:off)
+    kubectl -n "$NS" delete deploy/lisa-minio svc/"$GS_SERVICE" secret/lisa-minio-root --ignore-not-found >/dev/null
+    say "MinIO in $NS deleted, with its data"
+    ;;
 
   artifacts:)
     [ -f "$N/modules.yaml" ] || { say "ERROR: $N missing"; exit 1; }
@@ -781,7 +855,17 @@ YAML
 
   clean:)
     argo delete -n "$NS" -l "$LABEL" 2>&1 | tail -n 20
-    say "trial workflows deleted; interLink removes their job folders on the login node"
+    # interLink removes a pod's job folder when it deletes the pod. Wait for that, so that a mode switch
+    # or 'restore' right after does not stop interLink first and leave job folders (keys, tokens) behind.
+    if proc_up il-vk; then
+      for _ in $(seq 1 40); do
+        [ -z "$(kubectl get pods -A --field-selector "spec.nodeName=$NODE" --no-headers 2>/dev/null)" ] && break
+        sleep 3
+      done
+    fi
+    left="$(kubectl get pods -A --field-selector "spec.nodeName=$NODE" --no-headers 2>/dev/null | wc -l)"
+    if [ "$left" -eq 0 ]; then say "trial workflows deleted, no pod left on $NODE: interLink removed their job folders"
+    else say "WARNING: $left pods still on $NODE; their job folders stay on the login node until interLink deletes them"; fi
     ;;
 
   restore:)
