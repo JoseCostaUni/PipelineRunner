@@ -220,6 +220,7 @@ case "${1:-}" in
     ;;
 
   install)
+    case "$HPC_PROJECT_ROOT" in /*) ;; *) say "ERROR: HPC_PROJECT_ROOT must be an absolute path; it is '$HPC_PROJECT_ROOT'"; exit 1;; esac
     if installed; then
       systemctl --user is-active --quiet "$SIDECAR_UNIT" || { systemctl --user daemon-reload; systemctl --user start "$SIDECAR_UNIT"; sleep 5; }
       systemctl --user is-active --quiet "$SIDECAR_UNIT" && { say "sidecar installed and running ($SIDECAR_UNIT, port $SIDECAR_PORT)"; exit 0; }

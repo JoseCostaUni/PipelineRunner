@@ -12,6 +12,30 @@ three Lima VMs.
 
 ---
 
+## 2026-11-23 (later): first `make setup` on Ulisses; fail fast instead of hanging
+
+**What happened** on the first run on Ulisses:
+- **Ulisses side:** `make setup` installed Argo, fetched `argo` and `mc`, and built interLink 0.6.3.
+- **Sidecar:** did not start, because `deucalion.env` had `HPC_PROJECT_ROOT=HPC_PROJECT_ROOT=/projects/...`. The value was therefore a relative path: `sync` copied the repository into a folder literally named `HPC_PROJECT_ROOT=` in the home of `jcosta.up`, and the sidecar's unit had a relative `ExecStart`, which systemd refuses.
+- **Linger:** Deucalion does not allow it (`loginctl enable-linger` is refused), as anticipated.
+- **`make check` hung.** Isabel's MinIO (`68.221.216.246:9000`) did not answer from Ulisses or from the login node (HTTP 000 from both). `mc alias set` keeps retrying for minutes when nothing answers.
+
+**What changed** (`deploy/deucalion/`):
+- **`gs()` checks the endpoint first.** It asks the endpoint's health URL with `curl -m 8` and gives `mc alias set` 30 s. `check` reports a `FAIL` with the cause, and `artifacts`, `reset-data` and `test` stop instead of hanging. *Why:* a hang gives no information; the first run on the real site lost time to it.
+- **`HPC_PROJECT_ROOT` must be an absolute path:**
+  - `check` fails on it;
+  - `sync` and `hpc-side.sh install` refuse it.
+
+  *Why:* a relative value silently scatters files into the login node's home folder.
+
+**Evidence.**
+- **Testbed, bad settings** (`GS_ENDPOINT` pointing at a dead address and `HPC_PROJECT_ROOT=HPC_PROJECT_ROOT=/x`): `check`, `sync` and `reset-data` all stopped with those messages within 18 s in total.
+- **Testbed, correct settings:** `reset-data` and the bucket check still pass.
+
+**Open:** the Global Storage is unreachable. Nothing can run until Isabel's MinIO answers again (or another reachable S3 endpoint is configured).
+
+---
+
 ## 2026-11-23: run the trial with your own accounts, no root
 
 **Context.** The first attempt on Ulisses (18 Nov) could not start: the scripts assumed root on

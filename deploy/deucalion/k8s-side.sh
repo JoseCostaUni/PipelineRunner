@@ -106,10 +106,16 @@ say()  { printf '%s\n' "$*"; }
 pass() { printf 'PASS  %s\n' "$*"; }
 fail() { printf 'FAIL  %s\n' "$*"; FAILED=1; }
 info() { printf 'INFO  %s\n' "$*"; }
+# mc's alias for the Global Storage. mc retries for minutes when the endpoint does not answer, so
+# check that something answers there first, and give up after 30 s.
 gs() {
   local scheme=https; [ "${GS_INSECURE:-true}" = true ] && scheme=http
-  mc alias set gs "$scheme://$GS_ENDPOINT" "$GS_ACCESS_KEY" "$GS_SECRET_KEY" >/dev/null
+  curl -s -m 8 -o /dev/null "$scheme://$GS_ENDPOINT/minio/health/live" \
+    || { say "ERROR: the Global Storage $GS_ENDPOINT does not answer from $(hostname): is it running, is GS_ENDPOINT right?"; return 1; }
+  timeout 30 mc alias set gs "$scheme://$GS_ENDPOINT" "$GS_ACCESS_KEY" "$GS_SECRET_KEY" >/dev/null \
+    || { say "ERROR: mc could not log in to $GS_ENDPOINT (GS_ACCESS_KEY, GS_SECRET_KEY)"; return 1; }
 }
+abs_root() { case "$HPC_PROJECT_ROOT" in /*) return 0;; *) say "ERROR: HPC_PROJECT_ROOT must be an absolute path; it is '$HPC_PROJECT_ROOT'"; return 1;; esac; }
 port_free() { ! ss -ltn 2>/dev/null | awk 'NR > 1 {print $4}' | grep -q "[:.]$1\$"; }
 # The API server's CA, from the kubeconfig (embedded or as a file).
 cluster_ca() {
@@ -310,6 +316,7 @@ case "${1:-}:${2:-}" in
     for v in HPC_LOGIN_HOST HPC_USER HPC_PROJECT_ROOT SLURM_ACCOUNT SLURM_PARTITION SSH_KEY INTERLINK_NODE_NAME ARGO_NAMESPACE GS_ENDPOINT GS_BUCKET; do
       [ -n "${!v}" ] || fail "$v is empty in $ENV_FILE"
     done
+    abs_root >/dev/null && pass "HPC_PROJECT_ROOT $HPC_PROJECT_ROOT" || fail "HPC_PROJECT_ROOT must be an absolute path; it is '$HPC_PROJECT_ROOT'"
     [ -r "$SSH_KEY" ] && pass "SSH_KEY $SSH_KEY readable" || fail "SSH_KEY $SSH_KEY not readable"
     for t in kubectl jq curl ssh ssh-keyscan setsid openssl git tar; do command -v "$t" >/dev/null && pass "found $t" || fail "missing $t"; done
     for t in argo mc; do command -v "$t" >/dev/null && pass "found $t ($(command -v "$t"))" || fail "missing $t: run './k8s-side.sh tools'"; done
@@ -326,10 +333,12 @@ case "${1:-}:${2:-}" in
     [ -d "$DATASETS" ] && pass "test datasets in $DATASETS" || fail "no $DATASETS"
     ssh "${SSHO[@]}" "$HPC_USER@$HPC_LOGIN_HOST" true 2>/dev/null && pass "ssh to $HPC_USER@$HPC_LOGIN_HOST with $SSH_KEY" \
       || fail "ssh to $HPC_USER@$HPC_LOGIN_HOST with $SSH_KEY failed"
-    if command -v mc >/dev/null; then
-      gs; mc ls "gs/$GS_BUCKET" >/dev/null 2>&1 && pass "Global Storage bucket $GS_BUCKET reachable from here" \
-        || info "bucket $GS_BUCKET not reachable or missing (created by 'artifacts'); check GS_ENDPOINT and the keys"
-    fi
+    # Both modes: the tests reset the data and check the results from here.
+    if ! command -v mc >/dev/null; then :
+    elif out="$(gs)"; then
+      timeout 30 mc ls "gs/$GS_BUCKET" >/dev/null 2>&1 && pass "Global Storage bucket $GS_BUCKET reachable from here" \
+        || info "Global Storage $GS_ENDPOINT answers, bucket $GS_BUCKET missing ('artifacts' creates it)"
+    else fail "${out#ERROR: }"; fi
     for p in "$TUNNEL_PORT" "$VK_PORT"; do
       if port_free "$p"; then pass "port $p free here"
       elif proc_up il-tunnel || proc_up il-vk; then info "port $p in use, by our interLink"
@@ -536,6 +545,7 @@ YAML
   sync:)
     # Everything but the results and the settings, then the settings without the Global Storage keys:
     # hpc-side.sh does not use them, and HPC_PROJECT_ROOT may be a folder other people can read.
+    abs_root || exit 1
     envname="$(basename "$ENV_FILE")"
     tar -C "$ZE" --exclude=./deploy/deucalion/results --exclude=./.git --exclude="./deploy/deucalion/$envname" -cz . \
       | ssh "${SSHO[@]}" "$HPC_USER@$HPC_LOGIN_HOST" "mkdir -p '$HPC_REPO_DIR' && tar -xzm -C '$HPC_REPO_DIR'" \
@@ -553,7 +563,7 @@ YAML
 
   artifacts:)
     [ -f "$N/modules.yaml" ] || { say "ERROR: $N missing"; exit 1; }
-    gs
+    gs || exit 1
     mc mb -p "gs/$GS_BUCKET" >/dev/null
     if kubectl -n "$NS" get cm artifact-repositories >/dev/null 2>&1 && [ ! -f "$STATE/artifact-repositories.yaml" ]; then
       # Without the server-side fields, so 'restore' can put it back over the one applied here.
@@ -596,7 +606,7 @@ YAML
   reset-data:)
     # Results of an earlier run would make the object checks pass without this run having written them.
     [ -d "$DATASETS" ] || { say "ERROR: $DATASETS missing"; exit 1; }
-    gs
+    gs || exit 1
     mc rm --recursive --force "gs/$GS_BUCKET/users" >/dev/null 2>&1 || true
     mc rm --recursive --force "gs/$GS_BUCKET/t1" >/dev/null 2>&1 || true
     mc mirror --overwrite "$DATASETS" "gs/$GS_BUCKET/users" >/dev/null || { say "ERROR: upload to $GS_BUCKET failed"; exit 1; }
@@ -728,7 +738,7 @@ YAML
     tests="$*"; [ -n "$tests" ] || tests="$(ls "$N" | sed -n 's/^\([0-9][0-9]\)-.*\.yaml$/\1/p' | tr '\n' ' ')"
     RUN="$(date +%Y%m%d-%H%M%S)"; OUT="$HERE/results/$RUN-$m"; mkdir -p "$OUT"
     bash "$0" reset-data || exit 1
-    gs
+    gs || exit 1
     say "run $RUN, mode $m (interLink $(il_version)): tests $tests -> $OUT"
     echo "mode $m, interLink $(il_version), partition $SLURM_PARTITION" >"$OUT/summary.txt"
     for T in $tests; do
