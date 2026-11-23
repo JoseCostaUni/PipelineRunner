@@ -133,7 +133,11 @@ case "${1:-}" in
     done
     if sinfo -h -p "$SLURM_PARTITION" -o '%P' 2>/dev/null | grep -q .; then pass "partition $SLURM_PARTITION exists"
     else fail "partition $SLURM_PARTITION not found; partitions: $(sinfo -h -o '%P' | tr '\n' ' ')"; fi
-    df -h "$HPC_PROJECT_ROOT" 2>/dev/null | tail -n 1 | awk '{print "INFO  project file system: " $4 " free of " $2}'
+    # -P: one line per file system even with a long name (Lustre). Images and job folders need room.
+    avail="$(df -P "$HPC_PROJECT_ROOT" 2>/dev/null | awk 'NR == 2 {print $4}')"
+    if [ -n "$avail" ] && [ "$avail" -lt 1048576 ]; then
+      fail "only $((avail / 1024)) MB free on the file system of $HPC_PROJECT_ROOT ($(df -P "$HPC_PROJECT_ROOT" | awk 'NR == 2 {print $6}')): pick a HPC_PROJECT_ROOT elsewhere"
+    else info "project file system: $(df -Ph "$HPC_PROJECT_ROOT" 2>/dev/null | awk 'NR == 2 {print $4 " free of " $2}')"; fi
 
     if [ "$want" != reverse ]; then
       say "== split (interLink 0.6.1 + split executor)"

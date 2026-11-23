@@ -34,6 +34,28 @@ three Lima VMs.
 
 **Open:** the Global Storage is unreachable. Nothing can run until Isabel's MinIO answers again (or another reachable S3 endpoint is configured).
 
+**First `make check` on the real site** (`results/check-*.txt` and `results/probe-compute.txt` on Ulisses). Evidence for the assumptions both modes make:
+
+- **Ulisses:** everything passes with the account `jcosta` and no sudo: cluster-admin, Argo installed, both interLink versions, SSH to the login node, the API certificate valid for 10.227.63.27 and for `kubernetes.default.svc.cluster.local`.
+- **Login node (`ln01`), as `jcosta.up`:**
+  - the sidecar runs as a user service; linger is not allowed;
+  - SingularityCE 4.3.2 has `--no-eval` and `--contain`;
+  - `sbatch --hold` is accepted;
+  - `squeue --me` works;
+  - the Kubernetes API is not reachable from the login node, so `split` needs the relay.
+- **Compute node** (`cnx412`, `normal-x86`):
+  - every URL fails, including the Global Storage and the API: no outbound connections;
+  - it can resolve names (`quay.io`), so DNS works but connections don't;
+  - the shared folder is visible;
+  - `python3` is 3.6.8, the minimum the reverse tunnel's job relay needs;
+  - `/usr/sbin/sshd` exists;
+  - `srun --overlap` into the job works.
+
+  **So everything `reverse` needs from the site is there.**
+- **`/projects` is full:** 9.8T of 9.8T used, the HPCvLAB group alone 8.1T. `/home` (NFS) has room: a 20 GB quota per user, and 22T free in total.
+  - *Change:* `hpc-side.sh check` now fails when less than 1 GB is free under `HPC_PROJECT_ROOT`. Before, it printed the free space as `INFO`, and `0 free of 9.8T` was easy to miss.
+  - *Decision:* `HPC_PROJECT_ROOT` moves to `/home/jcosta.up/lisa`. It is private, unlike the shared folder, which also keeps the job folders' keys and tokens away from the group.
+
 ---
 
 ## 2026-11-23: run the trial with your own accounts, no root
