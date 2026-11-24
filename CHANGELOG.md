@@ -12,6 +12,47 @@ three Lima VMs.
 
 ---
 
+## 2026-11-24 (later): `make evidence`; interLink's logs made private
+
+**Why.** We needed to show which versions ran, with which configuration, and that `reverse`
+really used the tunnel, from records rather than from memory. The obvious answer was to copy
+interLink's logs, but a scan of the testbed's logs (`/tmp` scripts, 24 Nov) found:
+- **`il-api.log`:** the Global Storage secret keys, base64-encoded, 5 and 6 times for the two keys
+  used. With verbose logging, interLink logs the Secrets it passes to the sidecar.
+- **`il-vk.log` and `il-api.log`:** 12 service-account tokens (JWTs) each.
+- **Not found:** the SSH private key (base64 of `BEGIN OPENSSH PRIVATE KEY`) in either log, and in
+  the sidecar's log on the login node, no key value (plain or base64) and no token.
+- **Exposure:** the logs were `-rw-rw-r--` in a `drwxr-xr-x` `~/lisa-trial`. Only the home
+  folder's mode (`drwx------` on Ulisses and on the testbed) kept other users out.
+
+**What changed** (`deploy/deucalion/`):
+- **`k8s-side.sh` runs with `umask 077`,** and makes `TRIAL_HOME` and its logs private
+  (`700`/`600`) on every call.
+- **`make evidence [RUN=<run>]`** (`k8s-side.sh evidence`, `hpc-side.sh evidence`) collects into
+  `results/<run>/evidence/`:
+  - the configuration of both sides;
+  - versions: sha256 of every binary, Go's build info (module, `vcs.revision`) next to the tag's
+    commit from GitHub, and the plugin's sha256 next to the release's published `checksums.txt`;
+  - Slurm's record of the jobs (`sacct`, else `squeue`);
+  - the lines of interLink's and the sidecar's logs in the run's time window (UTC).
+
+  Every Secret's `data` and every token is blanked. The folder is then searched for the Global
+  Storage keys (plain and base64) and for tokens, and deleted if anything is found.
+- **`make test` snapshots both sides' configuration into `results/<run>/config/` when a run
+  starts.** *Why:* `evidence` collected after `restore` sees the plain configuration again, not
+  the one the run used.
+
+**Evidence (testbed, run `20261124-014246-reverse`).**
+- **interLink:** the binaries' `vcs.revision` equals the tag's commit (0.6.1 `b49984c0…`, 0.6.3
+  `6b0203b0…`, the latter built here).
+- **Slurm plugin:** the binaries' sha256 equal the published checksums of releases 0.6.1 and 0.6.3.
+- **Reverse tunnel:** the virtual kubelet config has `Network.EnableTunnel: true`,
+  `ShadowMode: ssh`, `Reverse.Enabled: true`, `NodeExec: srun`, `Sshd: userspace`, and its log of
+  the run names the shadow pods 44 times.
+- **Secret scan of the bundle:** no key (plain or base64), no token.
+
+---
+
 ## 2026-11-24 (later): evidence of where every step runs (`where.tsv`, TC11)
 
 **Why.** The claim is "plain Argo workflows run on offline compute nodes". Up to now that rested on

@@ -36,6 +36,9 @@
 #                         results of earlier runs ('test' does this first)
 #   test [NN ...]         run tests/argo-native (default: all) and check results in Argo AND in the
 #                         Global Storage; results in ./results/<time>-<mode>/
+#   evidence [run]        collect what shows how a run ran (default: the last) into results/<run>/evidence:
+#                         configuration, versions, interLink's and the sidecar's logs of the run (secrets
+#                         blanked, then checked), Slurm's record of the jobs
 #   clean                 delete the trial's workflows (interLink then removes their job folders)
 #   restore               offload off, the login node's mode and sidecar off, interLink stopped, the
 #                         virtual node deleted, saved artifact repository back. Argo and TRIAL_HOME stay.
@@ -60,7 +63,11 @@ OWNER=deucalion-trial            # app.kubernetes.io/managed-by of what we creat
 # Everything this script installs or writes on Ulisses.
 TRIAL_HOME="${TRIAL_HOME:-$HOME/lisa-trial}"
 STATE="$TRIAL_HOME/state"; RUND="$TRIAL_HOME/run"; LOGD="$TRIAL_HOME/log"; CONF="$TRIAL_HOME/conf"
+# Private: interLink's verbose logs hold the pods' service-account tokens and the Secrets it passes
+# on (the Global Storage keys, base64), and the state folder the login node's pinned host keys.
+umask 077
 mkdir -p "$STATE" "$RUND" "$LOGD" "$CONF" "$TRIAL_HOME/bin"
+chmod 700 "$TRIAL_HOME" "$LOGD" 2>/dev/null; chmod 600 "$LOGD"/*.log 2>/dev/null
 export PATH="$TRIAL_HOME/bin:$PATH"
 # The virtual kubelet refuses a relative KUBECONFIG.
 KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
@@ -822,6 +829,9 @@ YAML
     say "run $RUN, mode $m (interLink $(il_version)): tests $tests -> $OUT"
     echo "mode $m, interLink $(il_version), partition $SLURM_PARTITION" >"$OUT/summary.txt"
     printf 'test\tpod\tkubernetes node\tslurm job\tpartition\tcompute node\tslurm state\n' >"$OUT/where.tsv"
+    # The configuration of both sides as this run uses it ('evidence' later sees only what is on then).
+    mkdir -p "$OUT/config"; cp "$CONF"/*.yaml "$OUT/config/" 2>/dev/null
+    hpc status >"$OUT/config/login-node-status.txt" 2>&1
     trap 'say ""; say "interrupted: results so far in $OUT/summary.txt. The workflow already submitted keeps running on the HPC side; ./k8s-side.sh clean (make clean) deletes it and cancels its job."; exit 130' INT TERM
     for T in $tests; do
       WF="$(ls "$N/$T"-*.yaml 2>/dev/null | head -n 1)"; [ -n "$WF" ] || { say "TC$T  no workflow file"; continue; }
@@ -873,6 +883,69 @@ YAML
     line="where: $n step pods; Slurm partitions: ${parts:-none recorded}; compute nodes: ${hosts:-none recorded} ($OUT/where.tsv)"
     say "$line"; echo "$line" >>"$OUT/summary.txt"
     say "summary: $OUT/summary.txt  (keep the whole folder as evidence)"
+    ;;
+
+  evidence:*)
+    shift
+    run="${1:-$(ls -td "$HERE"/results/*-split "$HERE"/results/*-reverse 2>/dev/null | head -n 1)}"
+    run="$HERE/results/$(basename "$run")"
+    [ -f "$run/summary.txt" ] || { say "ERROR: no run in $run"; exit 1; }
+    id="$(basename "$run")"; id="${id%-*}"                     # 20261124-011219 (local time)
+    since="${id:0:4}-${id:4:2}-${id:6:2}T${id:9:2}:${id:11:2}:${id:13:2}"
+    t0="$(date -u -d "${since/T/ }" +%Y-%m-%dT%H:%M:%S)"     # the logs are in UTC
+    t1="$(date -u -d "@$(( $(date -r "$run/summary.txt" +%s) + 300 ))" +%Y-%m-%dT%H:%M:%S)"
+    E="$run/evidence"; rm -rf "$E"; mkdir -p "$E/ulisses"
+    cp "$CONF"/*.yaml "$E/ulisses/" 2>/dev/null
+    { cat "$STATE/mode" 2>/dev/null || echo none; } >"$E/ulisses/mode-now"
+    go="$(ls -d "$TRIAL_HOME"/go-*/bin/go 2>/dev/null | tail -n 1)"
+    {
+      for v in "$SPLIT_IL_VERSION" "$REVERSE_IL_VERSION"; do
+        echo "== interLink $v, tag commit: $(git ls-remote https://github.com/interlink-hq/interLink "refs/tags/$v" 2>/dev/null | cut -c1-40)"
+        for b in interlink virtual-kubelet; do
+          f="$(il_dir "$v")/$b"; [ -x "$f" ] || continue
+          sha256sum "$f"
+          [ -n "$go" ] && "$go" version -m "$f" 2>/dev/null | grep -E '^[^[:space:]]|path|vcs\.(revision|time|modified)'
+        done
+      done
+      echo "== Argo controller: $(kubectl -n argo get deploy workflow-controller -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)"
+      kubectl version 2>/dev/null
+    } >"$E/ulisses/versions.txt" 2>&1
+    # interLink's lines of the run only, with every Secret's data and every service-account token blanked.
+    for p in il-vk il-api il-tunnel relay-agent relay-tunnel; do
+      [ -s "$LOGD/$p.log" ] || continue
+      awk -v a="$t0" -v b="$t1" 'match($0, /time="[^"]*"/) { t = substr($0, RSTART + 6, 19); if (t >= a && t <= b) print }' "$LOGD/$p.log" \
+        | sed -E -e 's/(\\*"data\\*":\{)[^}]*/\1<redacted>/g' -e 's/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/<token>/g' >"$E/ulisses/$p.log"
+    done
+    if hpc evidence "$since" "$t0" "$t1" >"$E/login-node.tgz"; then tar -xzf "$E/login-node.tgz" -C "$E" && rm -f "$E/login-node.tgz"
+    else say "WARNING: could not collect the login node's part"; fi
+    # Check before anything leaves this machine: no Global Storage key (plain or base64), no token.
+    leak=""
+    for s in "$GS_ACCESS_KEY" "$GS_SECRET_KEY"; do
+      [ "${#s}" -ge 4 ] || continue
+      grep -r -q -F -e "$s" -e "$(printf %s "$s" | base64)" "$E" && leak="a Global Storage key"
+    done
+    grep -r -q -e 'eyJhbGciOi' "$E" && leak="${leak:+$leak and }a token"
+    [ -z "$leak" ] || { rm -rf "$E"; say "ERROR: $leak found in the evidence; removed it, nothing kept"; exit 1; }
+    cat >"$E/README.txt" <<TXT
+Evidence for run $(basename "$run") (collected $(date -Is) by k8s-side.sh evidence). Window: $t0 to $t1 UTC.
+Secrets were blanked (Secret data, service-account tokens) and the folder checked for the Global Storage keys.
+
+../summary.txt               what passed; the last line lists the Slurm partitions and compute nodes
+../where.tsv                 every step pod -> its Slurm job, partition, compute node, state
+../config/                   both sides' configuration as the run started (runs since 24 Nov 2026)
+ulisses/mode-now             the mode on Ulisses when this was collected
+ulisses/*Config.yaml         interLink's configuration as used (in reverse: Network.SSH.Reverse, the tunnel)
+ulisses/versions.txt         interLink binaries: sha256, Go build info (module, commit); Argo; Kubernetes
+ulisses/il-vk.log            the virtual kubelet: pods, shadow pods of the reverse tunnel, node status
+ulisses/il-api.log           interLink's API: calls to the sidecar on the login node
+login-node/SlurmConfig.yaml  the plugin's configuration (in reverse: SocketDirRoot, the subPath fix as SbatchPath)
+login-node/sidecar-unit.txt  the plugin binary the user service runs (a drop-in in reverse)
+login-node/versions.txt      plugin binaries' sha256 next to the release's published checksums; Singularity; Slurm
+login-node/slurm-jobs.txt    Slurm's record of the jobs since the run started (job name = pod UID)
+login-node/sidecar.log       the plugin's log of the run: submissions, the per-pod socket folders, deletions
+login-node/probe-compute.out the last probe of a compute node of the partition (network, python3, sshd)
+TXT
+    say "evidence in $E:"; (cd "$E" && find . -type f | sort | sed 's|^\./|   |')
     ;;
 
   clean:)

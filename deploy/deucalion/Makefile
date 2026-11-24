@@ -9,6 +9,8 @@
 #   make test [T=00]      run the tests (default: all) in the mode that is on
 #   make status | diag | clean
 #   make restore          clean, then both sides off: offload off, sidecar and interLink stopped, node deleted
+#   make evidence [RUN=<results folder>]  configuration, versions, logs (secrets blanked) and Slurm's
+#                         record of a run (default: the last) into results/<run>/evidence
 #   make results          results.tgz in your home folder, to copy to the Mac
 #   make login            a shell on the login node, in this folder
 # Every target calls k8s-side.sh, which runs hpc-side.sh on the login node when needed.
@@ -17,7 +19,7 @@ SHELL := /bin/bash
 ENV_FILE ?= deucalion.env
 K := SPLIT_ENV=$(abspath $(ENV_FILE)) ./k8s-side.sh
 
-.PHONY: env setup sync check reverse split test status diag clean restore results login minio minio-off
+.PHONY: env setup sync check reverse split test status diag clean restore results login minio minio-off evidence
 
 env:
 	[ -f $(ENV_FILE) ] || { cp deucalion.env.example $(ENV_FILE) && chmod 600 $(ENV_FILE); }
@@ -65,3 +67,6 @@ minio:
 
 minio-off:
 	$(K) minio off
+
+evidence:
+	$(K) evidence $(RUN)

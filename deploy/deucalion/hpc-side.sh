@@ -21,6 +21,8 @@
 #                         is not reachable from here)
 #   status                which mode is on, what is configured and running now
 #   mode                  print only the mode that is on: split, reverse or none
+#   evidence <since> <t0> <t1>  a tar.gz on stdout for 'k8s-side.sh evidence' (configuration, versions,
+#                         Slurm's record of the jobs, the sidecar's log of the run)
 set -o pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ZE="$(cd "$HERE/../.." && pwd)"
@@ -452,6 +454,34 @@ CONF
     jr="$(key DataRootFolder "$CFG")"
     n="$(ls -d "$jr"*/ 2>/dev/null | wc -l)"; say "== job folders in $jr: $n (they hold data, keys and tokens: see README, cleanup)"
     if [ "$(mode_on)" = reverse ]; then say "== reverse tunnel: $(ls "$SOCK" 2>/dev/null | wc -l) pod socket folders in $SOCK"; fi
+    ;;
+
+  evidence)
+    # A tar.gz on stdout with what shows how a run went on this side, for 'k8s-side.sh evidence':
+    # configuration, versions (checksums against the release's), Slurm's record of the jobs, the
+    # sidecar's log lines of the run (UTC window). Its log holds no secret values; tokens are blanked
+    # anyway.
+    since="${2:?start, local time}"; t0="${3:?start, UTC}"; t1="${4:?end, UTC}"
+    tmp="$(mktemp -d /tmp/lisa-ev.XXXXXX)"; d="$tmp/login-node"; mkdir -p "$d"
+    cp -p "$CFG" "$d/SlurmConfig.yaml" 2>/dev/null
+    systemctl --user cat "$SIDECAR_UNIT" >"$d/sidecar-unit.txt" 2>&1
+    {
+      echo "host: $(hostname), user: $(id -un), mode on now: $(mode_on), sidecar binary now: $(sidecar_bin)"
+      for f in "$BASE_PLUGIN" "$PLUGIN"; do [ -f "$f" ] && sha256sum "$f"; done
+      for v in "$SPLIT_IL_VERSION" "$REVERSE_IL_VERSION"; do
+        s="$(curl -fsSL -m 20 "https://github.com/interlink-hq/interlink-slurm-plugin/releases/download/$v/checksums.txt" 2>/dev/null | grep "_Linux_$ARCH\$")"
+        echo "release $v, published checksum: ${s:-not available}"
+      done
+      singularity --version
+      sinfo -V
+    } >"$d/versions.txt" 2>&1
+    sacct -X -P -S "$since" -o JobID,JobName,Partition,NodeList,State,Start,End,Elapsed >"$d/slurm-jobs.txt" 2>&1 \
+      || squeue --me -h -t all -o '%i|%j|%P|%N|%T' >"$d/slurm-jobs.txt" 2>&1
+    cp -p "$HPC_PROJECT_ROOT/probe-compute.out" "$d/" 2>/dev/null
+    awk -v a="$t0" -v b="$t1" 'match($0, /time="[^"]*"/) { t = substr($0, RSTART + 6, 19); if (t >= a && t <= b) print }' "$IL/sidecar.log" 2>/dev/null \
+      | sed -E 's/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/<token>/g' >"$d/sidecar.log"
+    tar -C "$tmp" -cz login-node
+    rm -rf "$tmp"
     ;;
 
   mode) mode_on ;;
