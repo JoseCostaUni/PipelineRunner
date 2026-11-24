@@ -183,6 +183,12 @@ hpc_mode() {
   case "$m" in split|reverse|none) echo "$m";; *) echo "unknown (no up-to-date copy of this repository in $HPC_DIR on the login node? run 'sync')";; esac
 }
 gs_endpoint() { if [ "$(k8s_mode)" = reverse ]; then echo "$GS_FQDN:$GS_PORT"; else echo "$GS_ENDPOINT"; fi; }
+# Our Slurm jobs as name|id|partition|nodes|state: squeue keeps finished jobs for a few minutes,
+# sacct (where the site keeps accounting) for longer.
+hpc_jobs() {
+  ssh "${SSHO[@]}" "$HPC_USER@$HPC_LOGIN_HOST" \
+    "bash -lc 'squeue --me -h -t all -o \"%j|%i|%P|%N|%T\" 2>/dev/null; sacct -X -n -P -S now-2days -o JobName,JobID,Partition,NodeList,State 2>/dev/null'" 2>/dev/null
+}
 
 # The two configuration files of interLink, written from the settings for one configuration:
 # split-direct, split-relay or reverse. The base is Isabel's (setup/kubernetes/3-bridge.sh) with our paths.
@@ -815,6 +821,7 @@ YAML
     gs || exit 1
     say "run $RUN, mode $m (interLink $(il_version)): tests $tests -> $OUT"
     echo "mode $m, interLink $(il_version), partition $SLURM_PARTITION" >"$OUT/summary.txt"
+    printf 'test\tpod\tkubernetes node\tslurm job\tpartition\tcompute node\tslurm state\n' >"$OUT/where.tsv"
     trap 'say ""; say "interrupted: results so far in $OUT/summary.txt. The workflow already submitted keeps running on the HPC side; ./k8s-side.sh clean (make clean) deletes it and cancels its job."; exit 130' INT TERM
     for T in $tests; do
       WF="$(ls "$N/$T"-*.yaml 2>/dev/null | head -n 1)"; [ -n "$WF" ] || { say "TC$T  no workflow file"; continue; }
@@ -830,6 +837,14 @@ YAML
       PHASE="$(jq -r '.status.phase // "Unknown"' "$D/workflow.json")"
       jq -r '(.status.nodes // {}) | to_entries[] | .value | select(.type == "Pod") | [.displayName, .phase] | @tsv' \
         "$D/workflow.json" | sort >"$D/steps.tsv"
+      # Where each step ran: its pod, and the Slurm job named after the pod's UID, as Slurm records it.
+      kubectl -n "$NS" get pods -l "workflows.argoproj.io/workflow=$NAME" -o json 2>/dev/null \
+        | jq -r '.items[] | [.metadata.name, .metadata.uid, .spec.nodeName] | @tsv' >"$D/pods.tsv"
+      jobs="$(hpc_jobs)"
+      while IFS=$'\t' read -r pod uid knode; do
+        j="$(printf '%s\n' "$jobs" | awk -F'|' -v u="$uid" '$1 == u {print $2 "\t" $3 "\t" $4 "\t" $5; exit}')"
+        printf 'TC%s\t%s\t%s\t%s\n' "$T" "$pod" "$knode" "${j:-no Slurm record}"
+      done <"$D/pods.tsv" | tee "$D/where.tsv" >>"$OUT/where.tsv"
       ok=0; tot=0; : >"$D/checks.tsv"
       while IFS=$'\t' read -r t kind what exp; do
         case "$t" in ''|'#'*) continue;; esac
@@ -852,6 +867,11 @@ YAML
       awk -F'\t' '$1=="FAIL" {print "        failed: " $2 " " $3 " (expected " $4 ", got " $5 ")"}' "$D/checks.tsv" | tee -a "$OUT/summary.txt"
       [ "$v" = FAIL ] && bash "$0" diag >"$D/diag.txt" 2>&1
     done
+    n="$(($(wc -l <"$OUT/where.tsv") - 1))"
+    parts="$(awk -F'\t' 'NR > 1 && $5 != "" {print $5}' "$OUT/where.tsv" | sort -u | tr '\n' ' ')"
+    hosts="$(awk -F'\t' 'NR > 1 && $6 != "" {print $6}' "$OUT/where.tsv" | sort -u | tr '\n' ' ')"
+    line="where: $n step pods; Slurm partitions: ${parts:-none recorded}; compute nodes: ${hosts:-none recorded} ($OUT/where.tsv)"
+    say "$line"; echo "$line" >>"$OUT/summary.txt"
     say "summary: $OUT/summary.txt  (keep the whole folder as evidence)"
     ;;
 

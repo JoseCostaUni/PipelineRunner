@@ -33,3 +33,5 @@
 10	object	users/system/test-10/simulation.txt	completed after 60 seconds
 10	object	users/system/test-10/aggregate-file.txt	TEST-03
 10	step	compute-read	Succeeded
+11	phase	-	Succeeded
+11	object	users/admin/test-11/network.txt	internet: blocked

@@ -12,6 +12,65 @@ three Lima VMs.
 
 ---
 
+## 2026-11-24 (later): evidence of where every step runs (`where.tsv`, TC11)
+
+**Why.** The claim is "plain Argo workflows run on offline compute nodes". Up to now that rested on
+two facts kept apart: `probe-compute` showed that a node of the partition reaches nothing, and the
+tests passed. Nothing tied a test's steps to the nodes they ran on, or showed from inside a step's
+container that it has no network.
+
+**Evidence for run `20261124-011219-reverse` on Deucalion, gathered by hand.**
+- **Pods to jobs:** each step pod became a Slurm job named after the pod's UID. Slurm accounting
+  (`sacct`) is enabled on Deucalion, and interLink's logs on Ulisses map UIDs to pod names.
+- **All on `normal-x86`:**
+  - TC00 on `cnx036` and `cnx043`;
+  - TC01, TC03 and TC04 on `cnx043`;
+  - TC02 on `cnx043` and `cnx427`; the step that reads a missing file is the job in state `FAILED`,
+    as the test intends;
+  - TC05's three parallel writes started within 9 s of each other on `cnx043`, `cnx427` and
+    `cnx497`, so steps of one workflow already run in parallel on several nodes, and its aggregation
+    ran on `cnx043`;
+  - TC06 started on `cnx043` and was `CANCELLED` by `make clean`.
+- **No network on that partition:** a node of the same partition reached nothing
+  (`probe-compute`, `cnx420`).
+
+**What changed.**
+- **`where.tsv` in every run folder.** After each test, `make test` records the test's pods (name,
+  UID, Kubernetes node) and asks Slurm for the jobs named after those UIDs: `squeue -t all`, which
+  keeps finished jobs for a few minutes, then `sacct` where accounting exists. The result is one row
+  per step pod with the Slurm job, partition, compute node and state. `summary.txt` ends with the
+  partitions and nodes.
+- **TC11 (`tests/argo-native/11-no-internet.yaml`).**
+  - The step records its node, then tries TCP connections to `1.1.1.1:443`, `8.8.8.8:53`,
+    `9.9.9.9:443`, `quay.io:443` and `github.com:443` from inside its container, and records
+    whether DNS resolves.
+  - The record goes to the Global Storage as an output artifact, and the test passes only if no
+    connection opened.
+  - *Why TCP connections:* the first version used `wget` and reported "not reachable" in a testbed
+    pod that does have internet. The pod reached `1.1.1.1`, but `wget` then failed on a redirect to
+    a name that pod could not resolve. `nc -z -w 5` tests the connection itself: in that pod it
+    opened to all three IP addresses (`internet: OPEN`), and it failed after 5 s to an unroutable
+    address.
+
+**Evidence (testbed, `reverse`, `20261124-014246-reverse`).**
+- TC00 and TC11 passed.
+- TC11's record in the Global Storage: node `lima-tb-cn`, DNS cannot resolve, nothing reachable,
+  `internet: blocked`.
+- `where.tsv` showed both steps as Slurm jobs 469 and 470 on partition `arm`, node `cn`, found
+  through `squeue` (the testbed has no accounting).
+- The summary line read the wrong columns; fixed after the run.
+
+**Still ours in `reverse`: the subPath fix.** Checked on 24 Nov:
+- the Slurm plugin's latest release is still 0.6.3;
+- `main` (last commit `c96b4291`, 21 Nov) still binds a whole emptyDir and ignores `subPath`. Its
+  only `subPath` handling, from #61 (June 2025), is for ConfigMaps and Secrets;
+- no open issue or PR covers emptyDirs.
+
+So the patch in `experiments/reverse-tunnel/upstream/` (9 lines and a unit test) is still needed
+upstream.
+
+---
+
 ## 2026-11-24: first plain Argo workflows on Deucalion; Ctrl-C stops `make test`
 
 **Result.** The first runs on the real site, in `reverse` mode (interLink 0.6.3), on `normal-x86`:

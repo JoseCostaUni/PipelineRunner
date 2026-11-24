@@ -18,6 +18,7 @@ artifact repository. Nothing in them refers to the HPC side; the platform sends 
 | TC08 | user isolation (wrapper path checks) | **not ported**: see below |
 | TC09 | write, sync back, read | write -> read (artifact passing) |
 | TC10 | system CronWorkflow, full flow | the same DAG as a plain Workflow |
+| TC11 | (new) | records the compute node and tries TCP connections to the internet (IPs and names) from inside the container; passes only if none opens. The record (`users/admin/test-11/network.txt`) stays in the Global Storage as evidence |
 
 TC08 tested her wrapper's per-user path checks (`/users/$ARGO_USER`). Standard Argo has no such
 check: isolation comes from who may use which artifact repository and credentials (per namespace),
