@@ -260,9 +260,29 @@ il_up() {
     "$d/virtual-kubelet" --nodename "$NODE" --configpath "$CONF/VirtualKubeletConfig.yaml"
   echo "${cfg%%-*} $v" >"$STATE/mode"
   wait_ready || return 1
+  approve_csr
   say "interLink $v up ($cfg); logs in $LOGD"
 }
 il_down() { local n; for n in il-vk il-api il-tunnel relay-agent relay-tunnel; do proc_stop "$n"; done; rm -f "$SOCKF" "$STATE/mode"; }
+# The virtual kubelet asks for its serving certificate with a CSR (signer kubernetes.io/kubelet-serving)
+# and waits for it indefinitely: nothing approves such requests on a kubeadm cluster. Without it the API
+# server cannot fetch container logs from it (kubectl/argo logs: "tls: internal error"). Approve only
+# the request of our node, made by us, not yet decided.
+approve_csr() {
+  local i c me
+  me="$(kubectl auth whoami -o jsonpath='{.status.userInfo.username}' 2>/dev/null)"
+  for i in $(seq 1 30); do
+    c="$(kubectl get csr -o json 2>/dev/null | jq -r --arg p "vk-$NODE-" --arg u "$me" '.items[]
+      | select((.metadata.name | startswith($p)) and .spec.signerName == "kubernetes.io/kubelet-serving"
+               and .spec.username == $u and ((.status.conditions // []) | length) == 0) | .metadata.name')"
+    if [ -n "$c" ]; then
+      # shellcheck disable=SC2086
+      kubectl certificate approve $c >/dev/null && { say "approved the virtual kubelet's serving certificate ($c): container logs work"; return 0; }
+    fi
+    sleep 2
+  done
+  say "WARNING: no certificate request of the virtual kubelet to approve: container logs (kubectl/argo logs) will not work"
+}
 
 gs_service() { # on|off: the Global Storage under a Service name in ARGO_NAMESPACE, for the tunnel
   local mine
@@ -843,13 +863,17 @@ YAML
       [ "$rc" -eq 124 ] && { argo stop -n "$NS" "$NAME" >/dev/null 2>&1; sleep 10; }
       secs=$(( $(date +%s) - start ))
       argo get -n "$NS" "$NAME" -o json >"$D/workflow.json" 2>/dev/null || echo '{}' >"$D/workflow.json"
-      argo logs -n "$NS" "$NAME" >"$D/logs.txt" 2>&1 || true
       PHASE="$(jq -r '.status.phase // "Unknown"' "$D/workflow.json")"
       jq -r '(.status.nodes // {}) | to_entries[] | .value | select(.type == "Pod") | [.displayName, .phase] | @tsv' \
         "$D/workflow.json" | sort >"$D/steps.tsv"
       # Where each step ran: its pod, and the Slurm job named after the pod's UID, as Slurm records it.
       kubectl -n "$NS" get pods -l "workflows.argoproj.io/workflow=$NAME" -o json 2>/dev/null \
         | jq -r '.items[] | [.metadata.name, .metadata.uid, .spec.nodeName] | @tsv' >"$D/pods.tsv"
+      # Each step's output, as the virtual kubelet serves it. Not 'argo logs': it asks for timestamps,
+      # which the virtual kubelet does not give, and turns every line into a parse error.
+      while IFS=$'\t' read -r pod _ _; do
+        echo "== $pod"; kubectl -n "$NS" logs "$pod" --all-containers --prefix 2>&1
+      done <"$D/pods.tsv" >"$D/logs.txt"
       jobs="$(hpc_jobs)"
       while IFS=$'\t' read -r pod uid knode; do
         j="$(printf '%s\n' "$jobs" | awk -F'|' -v u="$uid" '$1 == u {print $2 "\t" $3 "\t" $4 "\t" $5; exit}')"
@@ -918,12 +942,12 @@ YAML
     done
     if hpc evidence "$since" "$t0" "$t1" >"$E/login-node.tgz"; then tar -xzf "$E/login-node.tgz" -C "$E" && rm -f "$E/login-node.tgz"
     else say "WARNING: could not collect the login node's part"; fi
-    # Check before anything leaves this machine: no Global Storage key (plain or base64), no token.
+    # Check before anything leaves this machine: no secret key (plain or base64), no access key in base64
+    # (the form Secret data takes; the plain access key is a user name, like 'lisa' in 'lisa-jcosta'),
+    # no token.
     leak=""
-    for s in "$GS_ACCESS_KEY" "$GS_SECRET_KEY"; do
-      [ "${#s}" -ge 4 ] || continue
-      grep -r -q -F -e "$s" -e "$(printf %s "$s" | base64)" "$E" && leak="a Global Storage key"
-    done
+    [ -n "$GS_SECRET_KEY" ] && grep -r -q -F -e "$GS_SECRET_KEY" -e "$(printf %s "$GS_SECRET_KEY" | base64)" "$E" && leak="the Global Storage secret key"
+    [ -n "$GS_ACCESS_KEY" ] && grep -r -q -F -e "$(printf %s "$GS_ACCESS_KEY" | base64)" "$E" && leak="${leak:+$leak and }the access key in base64"
     grep -r -q -e 'eyJhbGciOi' "$E" && leak="${leak:+$leak and }a token"
     [ -z "$leak" ] || { rm -rf "$E"; say "ERROR: $leak found in the evidence; removed it, nothing kept"; exit 1; }
     cat >"$E/README.txt" <<TXT
@@ -975,6 +999,7 @@ TXT
     hpc uninstall || say "WARNING: could not stop the sidecar on the login node: run './k8s-side.sh hpc uninstall'"
     bash "$0" api off
     kubectl delete node "$NODE" --ignore-not-found >/dev/null && say "virtual node $NODE deleted"
+    for c in $(kubectl get csr -o name 2>/dev/null | grep "/vk-$NODE-"); do kubectl delete "$c" >/dev/null; done
     if [ -f "$STATE/artifact-repositories.yaml" ]; then
       kubectl replace -f "$STATE/artifact-repositories.yaml" >/dev/null \
         && rm -f "$STATE/artifact-repositories.yaml" && say "artifact-repositories ConfigMap restored"

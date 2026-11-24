@@ -12,6 +12,58 @@ three Lima VMs.
 
 ---
 
+## 2026-11-24 (later): container logs from the virtual node; evidence of the first Deucalion run
+
+**Context.** In the first Deucalion run every `logs.txt` held only an error:
+`Get "https://10.227.63.27:5830/containerLogs/...": remote error: tls: internal error`.
+- **Cause:** the virtual kubelet asks for its serving certificate with a CSR (signer
+  `kubernetes.io/kubelet-serving`) and "will wait indefinitely for approval" (its log).
+- **Why nothing approves it:** a kubeadm cluster does not approve such requests by itself.
+  `kubectl get csr` showed it `Pending` for 15 h on Ulisses, and likewise on the testbed.
+- **Consequence:** the API server could not fetch any container's log from the virtual node, so
+  `kubectl logs` and `argo logs` failed. Isabel's units had the same behaviour.
+
+**What changed** (`deploy/deucalion/k8s-side.sh`):
+- **After the virtual kubelet starts, `mode` approves its CSR.** Only a request named `vk-<node>-`,
+  for the kubelet-serving signer, made by the identity of the kubeconfig in use
+  (`kubectl auth whoami`), and not yet decided. `restore` deletes our node's CSRs.
+- **The runner fetches each step's log with `kubectl logs --all-containers --prefix`.** *Why not
+  `argo logs`:* it asks for timestamps, which the virtual kubelet does not give, and reports every
+  line as a parse error. The first try after the fix showed that.
+
+**Evidence of the CSR fix (testbed).** The request was `Approved,Issued`. Container logs came back
+instead of the TLS error (`20261124-162209-reverse`), and `restore` left no CSR of the node.
+
+With `kubectl logs`, run `20261124-162554-reverse` (TC00 and TC11 pass) has every container's own
+output in `logs.txt`:
+- in each of `init`, `main` and `wait`: `interLink: reverse tunnel ready after 68s` (72 s for
+  TC11);
+- TC00's step: `[t1] main on lima-tb-cn`;
+- TC11's step: `node: lima-tb-cn` and `internet: blocked`.
+
+So from now on each run's own logs show that every container ran on the compute node behind the
+tunnel.
+
+**Evidence of the first Deucalion run.** Run `20261124-011219-reverse` was collected with
+`make evidence` (on 24 Nov, from a temporary copy of the scripts on Ulisses). A copy is kept
+outside this repository, in `Dissertation/evidence/deucalion/`. The bundle's secret scan was clean.
+- **interLink 0.6.3:** its binaries' `vcs.revision` is `6b0203b0e92b…`, the commit of the tag
+  `0.6.3`. The virtual kubelet config has `Network.EnableTunnel: true`, `ShadowMode: ssh`, and
+  `Reverse` enabled with `NodeExec: srun`, `Sshd: userspace` and login host `ln01`.
+- **Slurm plugin:** the sha256 of the 0.6.1 and 0.6.3 binaries on `ln01` equal the checksums
+  published with those releases. SingularityCE 4.3.2, Slurm 23.11.8.
+- **The tunnel, for TC00's pod** (UID `b3b3151b…`):
+  - the virtual kubelet logged "shadow infrastructure for `lisa-jcosta/native-00-artifacts-m766l`";
+  - the sidecar created its socket folder `reverse-tunnel/sock/b3b3151bf5bd`;
+  - Slurm ran it as job 2265675 on `cnx043`, `normal-x86`.
+- **Every step of TC00 to TC06** appears in Slurm's record with its partition and node (entry
+  below).
+
+The job folders, with each job's own output (`job.out`, "reverse tunnel ready"), were already
+deleted by `clean`. And no `logs.txt` had content, because of the certificate problem above.
+
+---
+
 ## 2026-11-24 (later): `make evidence`; interLink's logs made private
 
 **Why.** We needed to show which versions ran, with which configuration, and that `reverse`
