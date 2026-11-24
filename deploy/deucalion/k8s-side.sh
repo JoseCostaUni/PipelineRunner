@@ -1,60 +1,54 @@
 #!/bin/bash
-# Deucalion trial, Kubernetes side. Runs on Ulisses as your own user: no root, no sudo. Needs a kubeconfig
+# Deucalion, Kubernetes side. Runs on Ulisses as your own user: no root, no sudo. Needs a kubeconfig
 # with cluster-admin (default ~/.kube/config), kubectl, jq, curl, ssh, ssh-keyscan, setsid, openssl, git,
 # and argo + mc ('tools' fetches them). Everything installed here lives in TRIAL_HOME (default
 # ~/lisa-trial); what goes into the cluster carries app.kubernetes.io/managed-by=deucalion-trial where it
-# can. See README.md.
-# Two modes, one at a time: split (interLink 0.6.1 + split executor) and reverse (interLink 0.6.3 +
-# reverse tunnel). 'mode' switches both sides at once; the commands below it are its steps.
+# can. Plain Argo workflows run whole on Deucalion's offline compute nodes through interLink 0.6.3 and
+# the reverse tunnel of its SSH shadow. See README.md.
 #
-#   check [split|reverse] read-only checks of this side (default: both modes)
-#   status                the mode of each side and what runs now (asks the login node too)
-#   argo                  install Argo Workflows (ARGO_VERSION) in namespace argo if it is not there, and
-#                         prepare ARGO_NAMESPACE, where the test workflows run
-#   tools                 argo (CLI, the controller's version) and mc into TRIAL_HOME/bin, if missing
-#   install               interLink SPLIT_IL_VERSION (release binaries) and REVERSE_IL_VERSION (built from
-#                         the tag when the release has no binaries) into TRIAL_HOME
-#   sync                  copy this repository, with the settings, to HPC_REPO_DIR on the login node
-#   hpc <command>         run hpc-side.sh <command> on the login node;  login: a shell there
-#   mode split|reverse    switch both sides to that mode: hpc-side.sh on the login node over ssh, then
-#                         interLink, the artifact repository and offload here. Next: 'test'
-#   executor-image        the argoexec image Argo puts in every pod (must be pre-pulled on Deucalion)
-#   api direct|relay      split: start interLink with that API address for offloaded containers:
-#                         direct = K8S_API_HOST, relay = the relay on the login node
-#   api reverse           reverse: start interLink 0.6.3 with the reverse tunnel of its ssh shadow
-#   api off               stop interLink here; reverse: delete the shadow's credentials and Service
-#   minio on|off          with GS_ENDPOINT=cluster: a MinIO inside the cluster as the Global Storage (the
-#                         Service GS_SERVICE in ARGO_NAMESPACE); only reverse can use it
-#   artifacts             make the Global Storage Argo's default artifact repository in ARGO_NAMESPACE
-#                         (as the mode that is on needs it), apply the test module library, upload the
-#                         test datasets (backs up what exists)
-#   offload on|off        send every workflow's pods to the interLink node (Argo workflowDefaults), so
-#                         the test workflows stay plain Argo; off restores the previous defaults
-#   relay-health          split: is the login-node relay reachable through our tunnel?  relay-log: agent log
-#   diag                  interLink's processes and logs; reverse: shadow pods and their logs
-#   reset-data            put the test data in the Global Storage back as in tests/datasets, without
-#                         results of earlier runs ('test' does this first)
-#   test [NN ...]         run tests/argo-native (default: all) and check results in Argo AND in the
-#                         Global Storage; results in ./results/<time>-<mode>/
-#   evidence [run]        collect what shows how a run ran (default: the last) into results/<run>/evidence:
-#                         configuration, versions, interLink's and the sidecar's logs of the run (secrets
-#                         blanked, then checked), Slurm's record of the jobs
-#   clean                 delete the trial's workflows (interLink then removes their job folders)
-#   restore               offload off, the login node's mode and sidecar off, interLink stopped, the
-#                         virtual node deleted, saved artifact repository back. Argo and TRIAL_HOME stay.
+#   check            read-only checks of this side
+#   status           what is configured and running on both sides (asks the login node too)
+#   argo             install Argo Workflows (ARGO_VERSION) in namespace argo if it is not there, and
+#                    prepare ARGO_NAMESPACE, where the test workflows run
+#   tools            argo (CLI, the controller's version) and mc into TRIAL_HOME/bin, if missing
+#   install          interLink IL_VERSION into TRIAL_HOME (release binaries, or built from the tag when
+#                    the release has none, as for 0.6.3)
+#   minio on|off     with GS_ENDPOINT=cluster: a MinIO inside the cluster as the Global Storage (the
+#                    Service GS_SERVICE in ARGO_NAMESPACE)
+#   sync             copy the scripts and the settings (without the keys) to HPC_REPO_DIR on the login node
+#   hpc <command>    run hpc-side.sh <command> on the login node;  login: a shell there
+#   up               bring both sides up: the sidecar on the login node, interLink here with the reverse
+#                    tunnel, the artifact repository, offload. Every step can be repeated. Next: 'test'
+#   down             offload off, interLink here stopped, the tunnel's credentials deleted
+#   executor-image   the argoexec image Argo puts in every pod (must be pre-pulled on Deucalion)
+#   artifacts        make the Global Storage Argo's default artifact repository in ARGO_NAMESPACE (under
+#                    its Service name, as the tunnel needs), apply the test module library, upload the
+#                    test datasets (backs up what exists)
+#   offload on|off   send every workflow's pods to the interLink node (Argo workflowDefaults), so the
+#                    test workflows stay plain Argo; off restores the previous defaults
+#   diag             interLink's processes and logs, the shadow pods and their logs
+#   reset-data       put the test data in the Global Storage back as in tests/datasets, without results
+#                    of earlier runs ('test' does this first)
+#   test [NN ...]    run tests/argo-native (default: all) and check results in Argo AND in the Global
+#                    Storage; results in ./results/<time>/
+#   evidence [run]   collect what shows how a run ran (default: the last) into results/<run>/evidence:
+#                    configuration, versions, interLink's and the sidecar's logs of the run (secrets
+#                    blanked, then checked), Slurm's record of the jobs
+#   clean            delete the test workflows (interLink then removes their job folders)
+#   restore          clean, down, the sidecar stopped, the virtual node and its CSRs deleted, saved
+#                    artifact repository back. Argo, the MinIO and TRIAL_HOME stay.
 set -o pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ZE="$(cd "$HERE/../.." && pwd)"
 N="$ZE/tests/argo-native"
-RELAYBIN="$ZE/setup/hpc/split-executor/api-relay/split-relay"
-# Settings: deucalion.env next to this script, or the file named in SPLIT_ENV (the testbed rehearsal
+# Settings: deucalion.env next to this script, or the file named in TRIAL_ENV (the testbed rehearsal
 # uses testbed.env).
-ENV_FILE="${SPLIT_ENV:-$HERE/deucalion.env}"
+ENV_FILE="${TRIAL_ENV:-${SPLIT_ENV:-$HERE/deucalion.env}}"
 [ -f "$ENV_FILE" ] || { echo "missing $ENV_FILE (copy deucalion.env.example)" >&2; exit 1; }
 # shellcheck disable=SC1090
 source "$ENV_FILE"
 DATASETS="$ZE/tests/datasets/users"
-LABEL=split-trial=true
+LABEL=lisa-test=true            # label of the test workflows (clean deletes them)
 NS="$ARGO_NAMESPACE"
 NODE="$INTERLINK_NODE_NAME"
 CM=workflow-controller-configmap
@@ -79,27 +73,26 @@ K8S_API_HOST="${K8S_API_HOST:-${srv%:*}}"
 K8S_API_PORT="${K8S_API_PORT:-${srv##*:}}"
 
 # interLink on Ulisses: one folder per version, its own processes, ports that are free on a machine
-# other people use too.
-SPLIT_IL_VERSION="${SPLIT_IL_VERSION:-0.6.1}"
-REVERSE_IL_VERSION="${REVERSE_IL_VERSION:-0.6.3}"
+# other people use too. (REVERSE_IL_VERSION: the name in settings files of the two-mode version.)
+IL_VERSION="${IL_VERSION:-${REVERSE_IL_VERSION:-0.6.3}}"
 il_dir() { echo "$TRIAL_HOME/interlink-$1"; }
+IL_DIR="$(il_dir "$IL_VERSION")"
 SOCKF="$RUND/interlink.sock"     # interLink API <-> virtual kubelet
 TUNNEL_PORT="${TUNNEL_PORT:-5100}"   # local end of the ssh tunnel to the sidecar
 SIDECAR_PORT="${SIDECAR_PORT:-4100}" # the sidecar's port on the login node
 VK_PORT="${VK_PORT:-5830}"           # the virtual kubelet's HTTPS port (logs); 10250 is the real kubelet's
 VK_IP="${VK_IP:-$K8S_API_HOST}"      # the address the API server reaches the virtual kubelet at
-SPLIT_API="${SPLIT_API:-relay}"
 ARGO_VERSION="${ARGO_VERSION:-v3.7.12}"
 
 # The login node's host key, pinned on first use in our own file.
 SSHO=(-o BatchMode=yes -o LogLevel=ERROR -o ServerAliveInterval=30 -i "$SSH_KEY"
       -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$STATE/known_hosts")
-# This repository on the login node, where 'mode' runs hpc-side.sh.
+# This repository on the login node, where 'up' runs hpc-side.sh.
 HPC_REPO_DIR="${HPC_REPO_DIR:-$HPC_PROJECT_ROOT/lisa-pipeline-runner_ze}"
 HPC_DIR="$HPC_REPO_DIR/deploy/deucalion"
 
-# Reverse mode: the shadow's credentials live in the virtual kubelet's namespace, one per virtual node.
-SSH_TUNNEL_IMAGE="ghcr.io/interlink-hq/interlink/ssh-tunnel:$REVERSE_IL_VERSION"
+# The tunnel's shadow: its credentials live in the virtual kubelet's namespace, one per virtual node.
+SSH_TUNNEL_IMAGE="ghcr.io/interlink-hq/interlink/ssh-tunnel:$IL_VERSION"
 RT_NS="${RT_NS:-$NODE}"
 RT_KEY=trial-hpc-ssh-key         # Secret: SSH_KEY, for the shadow's ssh to the login node
 RT_KNOWN=trial-hpc-known-hosts   # ConfigMap: the login node's host keys
@@ -107,8 +100,8 @@ RT_KNOWN=trial-hpc-known-hosts   # ConfigMap: the login node's host keys
 # and the Kubernetes API on a port an unprivileged sshd can bind.
 GS_SERVICE="${GS_SERVICE:-global-storage}"
 # GS_ENDPOINT=cluster: the Global Storage is a MinIO of ours inside the cluster ('minio on'), the
-# Service GS_SERVICE in ARGO_NAMESPACE. Ulisses reaches it at the Service's cluster IP, the jobs of
-# reverse through the tunnel under its name. The login node cannot reach it, so split cannot use it.
+# Service GS_SERVICE in ARGO_NAMESPACE. Ulisses reaches it at the Service's cluster IP, the jobs through
+# the tunnel under its name.
 GS_IN_CLUSTER=false
 MINIO_IMAGE="${MINIO_IMAGE:-docker.io/pgsty/minio:RELEASE.2026-08-04T00-00-00Z}"
 if [ "$GS_ENDPOINT" = cluster ]; then
@@ -118,7 +111,9 @@ fi
 GS_HOST="${GS_ENDPOINT%:*}"
 case "$GS_ENDPOINT" in *:*) GS_PORT="${GS_ENDPOINT##*:}";; *) [ "${GS_INSECURE:-true}" = true ] && GS_PORT=80 || GS_PORT=443;; esac
 GS_FQDN="$GS_SERVICE.$NS.svc.cluster.local"
-FORWARDS="$GS_FQDN:$GS_PORT 6443:kubernetes.default.svc.cluster.local:443"
+# What every pod asks the tunnel for: the Global Storage, the Kubernetes API (on a port an unprivileged
+# sshd can bind), and EXTRA_FORWARDS (space separated, e.g. a message bus: nats.<ns>.svc.cluster.local:4222).
+FORWARDS="$GS_FQDN:$GS_PORT 6443:kubernetes.default.svc.cluster.local:443${EXTRA_FORWARDS:+ $EXTRA_FORWARDS}"
 
 say()  { printf '%s\n' "$*"; }
 pass() { printf 'PASS  %s\n' "$*"; }
@@ -175,21 +170,23 @@ proc_stop() {
   kill -TERM -- "-$p" 2>/dev/null; sleep 1; kill -KILL -- "-$p" 2>/dev/null; rm -f "$RUND/$1.pid"; return 0
 }
 proc_up() { local p; p="$(cat "$RUND/$1.pid" 2>/dev/null)" && kill -0 "$p" 2>/dev/null; }
-PROCS="il-tunnel il-api il-vk relay-tunnel relay-agent"
+PROCS="il-tunnel il-api il-vk"
 
-k8s_mode() { local m v; if [ -f "$STATE/mode" ] && read -r m v <"$STATE/mode"; then echo "$m"; else echo none; fi; }
+# on (interLink up here, as 'up' left it) or off; $STATE/mode holds the version that runs.
+k8s_state() { if [ -f "$STATE/mode" ]; then echo on; else echo off; fi; }
 il_version() { local m v; if [ -f "$STATE/mode" ] && read -r m v <"$STATE/mode"; then echo "$v"; else echo none; fi; }
 # hpc-side.sh on the login node, over the same ssh as the rest of this script. A login shell, so
 # Slurm and Singularity are on the PATH as in an interactive session.
 hpc() {
   ssh "${SSHO[@]}" "$HPC_USER@$HPC_LOGIN_HOST" \
-    "SPLIT_ENV='$HPC_DIR/$(basename "$ENV_FILE")' bash -l '$HPC_DIR/hpc-side.sh' $*"
+    "TRIAL_ENV='$HPC_DIR/$(basename "$ENV_FILE")' bash -l '$HPC_DIR/hpc-side.sh' $*"
 }
-hpc_mode() {
-  local m; m="$(hpc mode 2>/dev/null | tail -n 1)"
-  case "$m" in split|reverse|none) echo "$m";; *) echo "unknown (no up-to-date copy of this repository in $HPC_DIR on the login node? run 'sync')";; esac
+hpc_state() {
+  local m; m="$(hpc state 2>/dev/null | tail -n 1)"
+  case "$m" in on|off) echo "$m";; *) echo "unknown (no up-to-date copy of this repository in $HPC_DIR on the login node? run 'sync')";; esac
 }
-gs_endpoint() { if [ "$(k8s_mode)" = reverse ]; then echo "$GS_FQDN:$GS_PORT"; else echo "$GS_ENDPOINT"; fi; }
+# Where the jobs reach the Global Storage: its Service name, through the tunnel.
+gs_endpoint() { echo "$GS_FQDN:$GS_PORT"; }
 # Our Slurm jobs as name|id|partition|nodes|state: squeue keeps finished jobs for a few minutes,
 # sacct (where the site keeps accounting) for longer.
 hpc_jobs() {
@@ -197,8 +194,11 @@ hpc_jobs() {
     "bash -lc 'squeue --me -h -t all -o \"%j|%i|%P|%N|%T\" 2>/dev/null; sacct -X -n -P -S now-2days -o JobName,JobID,Partition,NodeList,State 2>/dev/null'" 2>/dev/null
 }
 
-# The two configuration files of interLink, written from the settings for one configuration:
-# split-direct, split-relay or reverse. The base is Isabel's (setup/kubernetes/3-bridge.sh) with our paths.
+# The two configuration files of interLink, written from the settings. The base is Isabel's (her
+# setup/kubernetes/3-bridge.sh) with our paths; the rest sets up the reverse tunnel of the SSH shadow:
+# it logs in to the login node as HPC_USER, reaches the job with srun --overlap and runs an sshd there
+# in user space (NodeExec srun, Sshd userspace: nothing to install on the site, no forwarding by the
+# site's sshd). Offloaded containers reach the API at kubernetes.default.svc.cluster.local:6443 through it.
 il_config() {
   cat >"$CONF/InterLinkConfig.yaml" <<YAML
 InterlinkAddress: "unix://$SOCKF"
@@ -216,13 +216,6 @@ InterlinkPort: ""
 VerboseLogging: true
 ErrorsOnlyLogging: false
 NodeName: "$NODE"
-YAML
-    case "$1" in
-      split-direct) printf 'KubernetesApiAddr: "%s"\nKubernetesApiPort: "%s"\n' "$K8S_API_HOST" "$K8S_API_PORT" ;;
-      split-relay)
-        printf 'KubernetesApiAddr: "127.0.0.1"\nKubernetesApiPort: "%s"\nKubernetesApiCaCrt: |\n' "$RELAY_API_PORT"
-        sed 's/^/  /' "$STATE/relay-ca.crt" ;;
-      reverse) cat <<YAML
 Namespace: "$RT_NS"
 KubernetesApiAddr: "kubernetes.default.svc.cluster.local"
 KubernetesApiPort: "6443"
@@ -240,30 +233,26 @@ Network:
       NodeExec: "srun"
       Sshd: "userspace"
 YAML
-        ;;
-    esac
   } >"$CONF/VirtualKubeletConfig.yaml"
 }
-# Start interLink here for one configuration: the ssh tunnel to the sidecar, the API, the virtual kubelet.
+# Start interLink here: the ssh tunnel to the sidecar, the API, the virtual kubelet.
 il_up() {
-  local cfg="$1" v d
-  case "$cfg" in reverse) v="$REVERSE_IL_VERSION";; *) v="$SPLIT_IL_VERSION";; esac
-  d="$(il_dir "$v")"
+  local v="$IL_VERSION" d="$IL_DIR"
   [ -x "$d/interlink" ] && [ -x "$d/virtual-kubelet" ] || { say "ERROR: interLink $v not in $d: run './k8s-side.sh install'"; return 1; }
   il_down
-  il_config "$cfg"
+  il_config
   proc_start il-tunnel ssh -N "${SSHO[@]}" -o ExitOnForwardFailure=yes \
     -L "127.0.0.1:$TUNNEL_PORT:127.0.0.1:$SIDECAR_PORT" "$HPC_USER@$HPC_LOGIN_HOST"
   proc_start il-api env INTERLINKCONFIGPATH="$CONF/InterLinkConfig.yaml" "$d/interlink"
   sleep 3
   proc_start il-vk env KUBECONFIG="$KUBECONFIG" KUBELET_PORT="$VK_PORT" POD_IP="$VK_IP" \
     "$d/virtual-kubelet" --nodename "$NODE" --configpath "$CONF/VirtualKubeletConfig.yaml"
-  echo "${cfg%%-*} $v" >"$STATE/mode"
+  echo "up $v" >"$STATE/mode"
   wait_ready || return 1
   approve_csr
-  say "interLink $v up ($cfg); logs in $LOGD"
+  say "interLink $v up; logs in $LOGD"
 }
-il_down() { local n; for n in il-vk il-api il-tunnel relay-agent relay-tunnel; do proc_stop "$n"; done; rm -f "$SOCKF" "$STATE/mode"; }
+il_down() { local n; for n in il-vk il-api il-tunnel; do proc_stop "$n"; done; rm -f "$SOCKF" "$STATE/mode"; }
 # The virtual kubelet asks for its serving certificate with a CSR (signer kubernetes.io/kubelet-serving)
 # and waits for it indefinitely: nothing approves such requests on a kubeadm cluster. Without it the API
 # server cannot fetch container logs from it (kubectl/argo logs: "tls: internal error"). Approve only
@@ -355,8 +344,7 @@ probe_shadow() {
 }
 
 case "${1:-}:${2:-}" in
-  check:|check:split|check:reverse)
-    want="${2:-both}"
+  check:)
     FAILED=0
     say "== Ulisses $(hostname), user $(id -un), TRIAL_HOME $TRIAL_HOME"
     for v in HPC_LOGIN_HOST HPC_USER HPC_PROJECT_ROOT SLURM_ACCOUNT SLURM_PARTITION SSH_KEY INTERLINK_NODE_NAME ARGO_NAMESPACE GS_ENDPOINT GS_BUCKET; do
@@ -379,7 +367,7 @@ case "${1:-}:${2:-}" in
     [ -d "$DATASETS" ] && pass "test datasets in $DATASETS" || fail "no $DATASETS"
     ssh "${SSHO[@]}" "$HPC_USER@$HPC_LOGIN_HOST" true 2>/dev/null && pass "ssh to $HPC_USER@$HPC_LOGIN_HOST with $SSH_KEY" \
       || fail "ssh to $HPC_USER@$HPC_LOGIN_HOST with $SSH_KEY failed"
-    # Both modes: the tests reset the data and check the results from here.
+    # The tests reset the data and check the results from here.
     if ! command -v mc >/dev/null; then :
     elif out="$(gs)"; then
       timeout 30 mc ls "gs/$GS_BUCKET" >/dev/null 2>&1 && pass "Global Storage bucket $GS_BUCKET reachable from here" \
@@ -396,47 +384,26 @@ case "${1:-}:${2:-}" in
     if kubectl -n "$NS" get cm artifact-repositories >/dev/null 2>&1; then info "namespace $NS already has an artifact-repositories ConfigMap ('artifacts' backs it up)"; fi
     wd="$(kubectl -n argo get cm "$CM" -o json 2>/dev/null | jq -r '.data.workflowDefaults // empty')"
     [ -n "$wd" ] && info "Argo already has workflowDefaults ('offload' backs them up)" || info "Argo has no workflowDefaults"
-    info "mode on: Ulisses $(k8s_mode) (interLink $(il_version)), login node $(hpc_mode)"
-
-    if [ "$want" != reverse ]; then
-      say "== split (interLink $SPLIT_IL_VERSION + split executor)"
-      d="$(il_dir "$SPLIT_IL_VERSION")"
-      [ -x "$d/virtual-kubelet" ] && pass "interLink $SPLIT_IL_VERSION installed in $d" || info "interLink $SPLIT_IL_VERSION not installed yet: run './k8s-side.sh install'"
-      [ -f "$RELAYBIN" ] && pass "relay binary $RELAYBIN" || fail "no $RELAYBIN"
-      # Offloaded containers (direct) and the relay agent (relay) call the API at K8S_API_HOST, so the
-      # API server's certificate must be valid for that address.
-      code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 --cacert "$STATE/cluster-ca.crt" "https://$K8S_API_HOST:$K8S_API_PORT/version")"
-      case "$code" in
-        200|401|403) pass "Kubernetes API at $K8S_API_HOST:$K8S_API_PORT, certificate valid for that address" ;;
-        *) fail "no Kubernetes API with a valid certificate at $K8S_API_HOST:$K8S_API_PORT (K8S_API_HOST; the kubeconfig says $srv)" ;;
-      esac
-      port_free "$RELAY_CTL_PORT" || proc_up relay-tunnel && pass "port $RELAY_CTL_PORT free here (relay tunnel)" \
-        || fail "port $RELAY_CTL_PORT already in use on this machine: pick other RELAY_*_PORT values"
-      [ "$GS_IN_CLUSTER" = true ] && fail "GS_ENDPOINT=cluster: the login node cannot reach a MinIO inside the cluster, so split cannot run with it"
-    fi
-    if [ "$want" != split ]; then
-      say "== reverse (interLink $REVERSE_IL_VERSION + reverse tunnel)"
-      d="$(il_dir "$REVERSE_IL_VERSION")"
-      if [ -x "$d/interlink" ] && [ -x "$d/virtual-kubelet" ]; then pass "interLink $REVERSE_IL_VERSION installed in $d"
-      else info "interLink $REVERSE_IL_VERSION not installed yet: 'install' builds it (needs internet, git and about 1 GB free)"; fi
-      [ "$GS_PORT" -ge 1024 ] 2>/dev/null && pass "Global Storage port $GS_PORT can be bound by the job's unprivileged sshd" \
-        || fail "Global Storage port $GS_PORT is below 1024: the job's sshd cannot bind it"
-      if kubectl -n "$NS" get svc "$GS_SERVICE" >/dev/null 2>&1 \
-         && [ "$(kubectl -n "$NS" get svc "$GS_SERVICE" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}')" != "$OWNER" ]; then
-        fail "Service $NS/$GS_SERVICE exists and is not ours: set GS_SERVICE to another name"
-      else pass "Service name $GS_FQDN free (or ours) for the Global Storage"; fi
-      if openssl s_client -connect "$K8S_API_HOST:$K8S_API_PORT" </dev/null 2>/dev/null | openssl x509 -noout -text 2>/dev/null \
-         | grep -q 'kubernetes.default.svc.cluster.local'; then
-        pass "API server certificate valid for kubernetes.default.svc.cluster.local (the name jobs use through the tunnel)"
-      else info "could not confirm that the API server's certificate names kubernetes.default.svc.cluster.local"; fi
-      [ -n "$(ssh-keyscan -T 10 "$HPC_LOGIN_HOST" 2>/dev/null)" ] && pass "ssh-keyscan $HPC_LOGIN_HOST works (pins the login node's key for the shadow)" \
-        || fail "ssh-keyscan $HPC_LOGIN_HOST returned nothing"
-    fi
+    info "now: Ulisses $(k8s_state) (interLink $(il_version)), login node $(hpc_state)"
+    if [ -x "$IL_DIR/interlink" ] && [ -x "$IL_DIR/virtual-kubelet" ]; then pass "interLink $IL_VERSION installed in $IL_DIR"
+    else info "interLink $IL_VERSION not installed yet: 'install' builds it (needs internet, git and about 1 GB free)"; fi
+    [ "$GS_PORT" -ge 1024 ] 2>/dev/null && pass "Global Storage port $GS_PORT can be bound by the job's unprivileged relay" \
+      || fail "Global Storage port $GS_PORT is below 1024: the job's relay cannot bind it"
+    if kubectl -n "$NS" get svc "$GS_SERVICE" >/dev/null 2>&1 \
+       && [ "$(kubectl -n "$NS" get svc "$GS_SERVICE" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}')" != "$OWNER" ]; then
+      fail "Service $NS/$GS_SERVICE exists and is not ours: set GS_SERVICE to another name"
+    else pass "Service name $GS_FQDN free (or ours) for the Global Storage"; fi
+    if openssl s_client -connect "$K8S_API_HOST:$K8S_API_PORT" </dev/null 2>/dev/null | openssl x509 -noout -text 2>/dev/null \
+       | grep -q 'kubernetes.default.svc.cluster.local'; then
+      pass "API server certificate valid for kubernetes.default.svc.cluster.local (the name jobs use through the tunnel)"
+    else info "could not confirm that the API server's certificate names kubernetes.default.svc.cluster.local"; fi
+    [ -n "$(ssh-keyscan -T 10 "$HPC_LOGIN_HOST" 2>/dev/null)" ] && pass "ssh-keyscan $HPC_LOGIN_HOST works (pins the login node's key for the shadow)" \
+      || fail "ssh-keyscan $HPC_LOGIN_HOST returned nothing"
     exit "$FAILED"
     ;;
 
   status:)
-    say "== Ulisses: mode $(k8s_mode), interLink $(il_version), $NODE Ready=$(node_ready)"
+    say "== Ulisses: $(k8s_state), interLink $(il_version), $NODE Ready=$(node_ready)"
     for p in $PROCS; do proc_up "$p" && say "   $p: running (log $LOGD/$p.log)"; done
     [ "$GS_IN_CLUSTER" = true ] && say "   Global Storage: MinIO in the cluster, $(kubectl -n "$NS" get deploy lisa-minio -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo 0)/1 ready at $GS_ENDPOINT"
     say "   artifact repository endpoint: $(kubectl -n "$NS" get cm artifact-repositories -o jsonpath='{.data.default-v1}' 2>/dev/null | sed -n 's/^ *endpoint: *//p')"
@@ -448,35 +415,26 @@ case "${1:-}:${2:-}" in
     hpc status 2>&1 | sed 's/^/   /'
     ;;
 
-  mode:split|mode:reverse)
-    m="$2"
-    step() { say "-- $*"; "$@" || { say "ERROR in: $*"; say "Fix it and run './k8s-side.sh mode $m' again: every step can be repeated. './k8s-side.sh status' shows where each side is."; exit 1; }; }
-    hm="$(hpc_mode)"
-    case "$hm" in split|reverse|none) ;; *) say "ERROR: login node: $hm"; exit 1;; esac
+  up:)
+    step() { say "-- $*"; "$@" || { say "ERROR in: $*"; say "Fix it and run './k8s-side.sh up' again: every step can be repeated. './k8s-side.sh status' shows where each side is."; exit 1; }; }
+    hs="$(hpc_state)"
+    case "$hs" in on|off) ;; *) say "ERROR: login node: $hs"; exit 1;; esac
     kubectl -n argo get deploy workflow-controller >/dev/null 2>&1 || { say "ERROR: no Argo: run './k8s-side.sh argo' first"; exit 1; }
-    say "== switching both sides to '$m' (now: Ulisses $(k8s_mode), login node $hm)"
+    say "== bringing both sides up (now: Ulisses $(k8s_state), login node $hs)"
     step bash "$0" offload off
-    # The login node first: the virtual node only becomes Ready when the plugin answers. 'install' and
-    # 'enable' run even when done before, so running 'mode' again repairs a half-done switch.
-    [ "$hm" = "$m" ] || [ "$hm" = none ] || step hpc disable
+    # The login node first: the virtual node only becomes Ready when the plugin answers. 'install'
+    # rewrites the sidecar's configuration from the settings and restarts it only if it changed.
     step hpc install
     step hpc images
-    step hpc enable "$m"
-    if [ "$m" = reverse ]; then
-      [ -x "$(il_dir "$REVERSE_IL_VERSION")/virtual-kubelet" ] || step bash "$0" install
-      step bash "$0" api reverse
-    else
-      [ -x "$(il_dir "$SPLIT_IL_VERSION")/virtual-kubelet" ] || step bash "$0" install
-      if [ "$SPLIT_API" = direct ]; then
-        step bash "$0" api direct
-      else
-        step hpc relay on
-        step bash "$0" api relay
-      fi
-    fi
+    [ -x "$IL_DIR/virtual-kubelet" ] || step bash "$0" install
+    step bash "$0" tunnel on
     step bash "$0" artifacts
     step bash "$0" offload on
-    say "== both sides in '$m'. Next: ./k8s-side.sh test 00"
+    say "== both sides up. Next: ./k8s-side.sh test 00"
+    ;;
+  down:)
+    bash "$0" offload off
+    bash "$0" tunnel off
     ;;
 
   executor-image:) executor_image ;;
@@ -554,7 +512,7 @@ YAML
 
   install:)
     case "$(uname -m)" in aarch64|arm64) arch=arm64; goarch=arm64;; *) arch=x86_64; goarch=amd64;; esac
-    for v in "$SPLIT_IL_VERSION" "$REVERSE_IL_VERSION"; do
+    for v in "$IL_VERSION"; do
       d="$(il_dir "$v")"; mkdir -p "$d"
       base="https://github.com/interlink-hq/interLink/releases/download/$v"
       if [ -x "$d/interlink" ] && [ -x "$d/virtual-kubelet" ]; then
@@ -587,7 +545,7 @@ YAML
         say "interLink $v built with Go $gov in $d"
       fi
     done
-    say "The shadow image ($SSH_TUNNEL_IMAGE) is pulled by the kubelet when 'api reverse' runs its probe pod."
+    say "The shadow image ($SSH_TUNNEL_IMAGE) is pulled by the kubelet when 'up' runs its probe pod."
     ;;
 
   sync:)
@@ -603,10 +561,12 @@ YAML
     # hpc-side.sh checks whether the login node reaches them.
     { grep -v -E '^GS_(ACCESS|SECRET)_KEY=' "$ENV_FILE"
       printf '\n# added by k8s-side.sh sync\nK8S_API_HOST=%s\nK8S_API_PORT=%s\n' "$K8S_API_HOST" "$K8S_API_PORT"
-      [ "$GS_IN_CLUSTER" = true ] && printf 'GS_ENDPOINT=%s   # the MinIO in the cluster\n' "$GS_ENDPOINT"; } \
+      # An 'if', not '[ ] &&': the group's status is the pipeline's (pipefail), so a false test would
+      # report a failed copy although the settings were written.
+      if [ "$GS_IN_CLUSTER" = true ]; then printf 'GS_ENDPOINT=%s   # the MinIO in the cluster\n' "$GS_ENDPOINT"; fi; } \
       | ssh "${SSHO[@]}" "$HPC_USER@$HPC_LOGIN_HOST" "umask 077 && cat >'$HPC_DIR/$envname'" \
       || { say "ERROR: copy of the settings failed"; exit 1; }
-    say "copied to $HPC_REPO_DIR on $HPC_LOGIN_HOST (settings without the Global Storage keys); login node mode: $(hpc_mode)"
+    say "copied to $HPC_REPO_DIR on $HPC_LOGIN_HOST (settings without the Global Storage keys); login node: $(hpc_state)"
     ;;
   hpc:*) shift; hpc "$@" ;;
   login:) exec ssh -t "${SSHO[@]/BatchMode=yes/BatchMode=no}" "$HPC_USER@$HPC_LOGIN_HOST" "cd '$HPC_DIR' && exec bash -l" ;;
@@ -678,11 +638,11 @@ YAML
         | grep -v -E '^  (resourceVersion|uid|creationTimestamp|managedFields):' >"$STATE/artifact-repositories.yaml"
       say "existing artifact-repositories saved to $STATE/artifact-repositories.yaml"
     fi
-    kubectl -n "$NS" create secret generic split-gs-creds \
+    kubectl -n "$NS" create secret generic lisa-gs-creds \
       --from-literal=accesskey="$GS_ACCESS_KEY" --from-literal=secretkey="$GS_SECRET_KEY" \
       --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-    # split: init and wait reach it from the login node; reverse: from the compute node, through the
-    # tunnel, under the Service name.
+    kubectl -n "$NS" delete secret split-gs-creds --ignore-not-found >/dev/null   # its name in the two-mode version
+    # init and wait reach it from the compute node, through the tunnel, under the Service name.
     ep="$(gs_endpoint)"
     kubectl apply -f - >/dev/null <<YAML
 apiVersion: v1
@@ -699,14 +659,14 @@ data:
       endpoint: $ep
       insecure: ${GS_INSECURE:-true}
       accessKeySecret:
-        name: split-gs-creds
+        name: lisa-gs-creds
         key: accesskey
       secretKeySecret:
-        name: split-gs-creds
+        name: lisa-gs-creds
         key: secretkey
 YAML
     kubectl apply -n "$NS" -f "$N/modules.yaml" >/dev/null
-    say "artifact repository ($(k8s_mode)): s3://$GS_BUCKET at $ep; WorkflowTemplate lisa-modules applied in $NS"
+    say "artifact repository: s3://$GS_BUCKET at $ep; WorkflowTemplate lisa-modules applied in $NS"
     bash "$0" reset-data
     ;;
 
@@ -733,13 +693,12 @@ YAML
     operator: Exists
   podMetadata:
     annotations:
-      slurm-job.vk.io/flags: \"--account=$SLURM_ACCOUNT --partition=$SLURM_PARTITION\""
-    # reverse: every pod asks for the tunnel to the Global Storage and the Kubernetes API.
-    [ "$(k8s_mode)" = reverse ] && defaults="$defaults
+      slurm-job.vk.io/flags: \"--account=$SLURM_ACCOUNT --partition=$SLURM_PARTITION\"
       interlink.eu/reverse-forwards: \"$FORWARDS\""
+    # Every pod asks for the tunnel to the Global Storage, the Kubernetes API and EXTRA_FORWARDS.
     kubectl -n argo patch cm "$CM" --type merge -p "$(jq -n --arg v "$defaults" '{data: {workflowDefaults: $v}}')" >/dev/null
     sleep 5
-    say "offload ON ($(k8s_mode)): every workflow's pods go to $NODE, partition $SLURM_PARTITION"
+    say "offload ON: every workflow's pods go to $NODE, partition $SLURM_PARTITION, tunnel to: $FORWARDS"
     say "Note: this applies to ALL workflows of this Argo, other users' too. Switch off after the trial."
     ;;
   offload:off)
@@ -754,31 +713,15 @@ YAML
     rm -f "$SAVED"; sleep 5; say "offload OFF: workflowDefaults restored"
     ;;
 
-  api:direct)
-    [ "$(k8s_mode)" = reverse ] && { bash "$0" api off || exit 1; }
-    il_up split-direct
-    ;;
-  api:relay)
-    [ "$(k8s_mode)" = reverse ] && { bash "$0" api off || exit 1; }
-    [ -x "$RELAYBIN" ] || chmod 0755 "$RELAYBIN" "$(dirname "$RELAYBIN")"/bin/split-relay-linux-* 2>/dev/null
-    ssh "${SSHO[@]}" "$HPC_USER@$HPC_LOGIN_HOST" "cat '$HPC_PROJECT_ROOT/split-executor/relay/ca.crt'" >"$STATE/relay-ca.crt" \
-      || { say "ERROR: could not fetch the relay CA (run './k8s-side.sh hpc relay on' first)"; exit 1; }
-    ca="$(cluster_ca)" || { say "ERROR: no certificate-authority in $KUBECONFIG"; exit 1; }
-    il_up split-relay || exit 1
-    # The tunnel is opened from here, like interLink's own: the login node never connects to Ulisses.
-    proc_start relay-tunnel ssh -N "${SSHO[@]}" -o ExitOnForwardFailure=yes \
-      -L "127.0.0.1:$RELAY_CTL_PORT:127.0.0.1:$RELAY_CTL_PORT" "$HPC_USER@$HPC_LOGIN_HOST"
-    proc_start relay-agent "$RELAYBIN" agent --ctl "http://127.0.0.1:$RELAY_CTL_PORT" \
-      --api "https://$K8S_API_HOST:$K8S_API_PORT" --ca "$ca"
-    bash "$0" relay-health
-    ;;
-  api:reverse)
-    [ -x "$(il_dir "$REVERSE_IL_VERSION")/virtual-kubelet" ] || { say "ERROR: interLink $REVERSE_IL_VERSION not installed: run './k8s-side.sh install' first"; exit 1; }
-    [ "$GS_PORT" -ge 1024 ] 2>/dev/null || { say "ERROR: Global Storage port $GS_PORT is below 1024: the job's unprivileged sshd cannot bind it"; exit 1; }
-    hm="$(hpc_mode)"
-    [ "$hm" = reverse ] || { say "ERROR: the login node is in '$hm', not reverse: run './k8s-side.sh hpc enable reverse' first"; exit 1; }
+  tunnel:on)
+    # interLink here with the reverse tunnel: the shadow's credentials, the Global Storage under a
+    # Service name, the three processes, and a check that a pod reaches the login node's sshd.
+    [ -x "$IL_DIR/virtual-kubelet" ] || { say "ERROR: interLink $IL_VERSION not installed: run './k8s-side.sh install' first"; exit 1; }
+    [ "$GS_PORT" -ge 1024 ] 2>/dev/null || { say "ERROR: Global Storage port $GS_PORT is below 1024: the job's unprivileged relay cannot bind it"; exit 1; }
+    hs="$(hpc_state)"
+    [ "$hs" = on ] || { say "ERROR: the sidecar on the login node is '$hs': run './k8s-side.sh hpc install' first"; exit 1; }
     kubectl get ns "$RT_NS" >/dev/null 2>&1 || { kubectl create ns "$RT_NS" >/dev/null && touch "$STATE/created-ns-$RT_NS"; }
-    # The shadow logs in to the login node as HPC_USER with SSH_KEY, which is why 'api off' deletes it
+    # The shadow logs in to the login node as HPC_USER with SSH_KEY, which is why 'down' deletes it
     # again, with every copy. interLink's docs advise a key for the tunnel only on a real site.
     kubectl -n "$RT_NS" create secret generic "$RT_KEY" --from-file=id_ed25519="$SSH_KEY" \
       --dry-run=client -o yaml | kubectl apply -f - >/dev/null
@@ -791,34 +734,21 @@ YAML
     kubectl -n "$RT_NS" create configmap "$RT_KNOWN" --from-file=known_hosts="$STATE/reverse-known_hosts" \
       --dry-run=client -o yaml | kubectl apply -f - >/dev/null
     gs_service on || exit 1
-    il_up reverse || exit 1
+    il_up || exit 1
     FAILED=0; probe_shadow
-    say "reverse ON: offloaded pods reach $GS_FQDN:$GS_PORT and the Kubernetes API through the login node"
+    say "tunnel ON: offloaded pods reach $FORWARDS through the login node"
     exit "$FAILED"
     ;;
-  api:off)
-    was="$(k8s_mode)"
+  tunnel:off)
     il_down
-    if [ "$was" = reverse ]; then
-      shadow_credentials_off
-      gs_service off
-      if [ -f "$STATE/created-ns-$RT_NS" ]; then kubectl delete ns "$RT_NS" --wait=false >/dev/null 2>&1; rm -f "$STATE/created-ns-$RT_NS"; fi
-      say "interLink stopped; SSH key Secrets and the Global Storage Service deleted"
-    else
-      say "interLink stopped"
-    fi
+    shadow_credentials_off
+    gs_service off
+    if [ -f "$STATE/created-ns-$RT_NS" ]; then kubectl delete ns "$RT_NS" --wait=false >/dev/null 2>&1; rm -f "$STATE/created-ns-$RT_NS"; fi
+    say "interLink stopped; SSH key Secrets and the Global Storage Service deleted"
     ;;
-  relay-health:)
-    for _ in $(seq 1 10); do
-      out="$(curl -s -m 5 "http://127.0.0.1:$RELAY_CTL_PORT/health" 2>/dev/null)" && [ -n "$out" ] && { say "relay reachable through the tunnel: $out"; exit 0; }
-      sleep 2
-    done
-    say "relay NOT reachable through the tunnel ($LOGD/relay-tunnel.log)"; exit 1
-    ;;
-  relay-log:) cat "$LOGD/relay-agent.log" 2>/dev/null || say "no agent log" ;;
 
   diag:)
-    say "== mode $(k8s_mode), interLink $(il_version), $NODE Ready=$(node_ready)"
+    say "== Ulisses: $(k8s_state), interLink $(il_version), $NODE Ready=$(node_ready)"
     for p in $PROCS; do if proc_up "$p"; then say "   $p: running"; else say "   $p: not running"; fi; done
     for p in il-tunnel il-api il-vk; do
       say "== $LOGD/$p.log (last 30 lines)"; tail -n 30 "$LOGD/$p.log" 2>/dev/null | cut -c1-300
@@ -831,23 +761,20 @@ YAML
 
   test:*)
     shift
-    m="$(k8s_mode)"
-    # Both sides, the artifact repository and the offload settings must agree on the mode.
-    [ "$m" != none ] || { say "ERROR: no mode on here: run './k8s-side.sh mode split|reverse'"; exit 1; }
-    hm="$(hpc_mode)"
-    [ "$hm" = "$m" ] || { say "ERROR: Ulisses is in '$m' but the login node in '$hm': run './k8s-side.sh mode $m'"; exit 1; }
+    # Both sides up, the artifact repository under the Service name, offload with the tunnel.
+    [ "$(k8s_state)" = on ] || { say "ERROR: interLink is not up here: run './k8s-side.sh up'"; exit 1; }
+    hs="$(hpc_state)"
+    [ "$hs" = on ] || { say "ERROR: the sidecar on the login node is '$hs': run './k8s-side.sh up'"; exit 1; }
     ep="$(kubectl -n "$NS" get cm artifact-repositories -o jsonpath='{.data.default-v1}' 2>/dev/null | sed -n 's/^ *endpoint: *//p')"
-    [ "$ep" = "$(gs_endpoint)" ] || { say "ERROR: the artifact repository points to '$ep', '$m' needs '$(gs_endpoint)': run './k8s-side.sh artifacts'"; exit 1; }
+    [ "$ep" = "$(gs_endpoint)" ] || { say "ERROR: the artifact repository points to '$ep', the jobs need '$(gs_endpoint)': run './k8s-side.sh artifacts'"; exit 1; }
     wd="$(kubectl -n argo get cm "$CM" -o json | jq -r '.data.workflowDefaults // ""')"
-    case "$wd" in *"$NODE"*) ;; *) say "ERROR: offload is off: run './k8s-side.sh offload on'"; exit 1;; esac
-    case "$wd" in *reverse-forwards*) wm=reverse;; *) wm=split;; esac
-    [ "$wm" = "$m" ] || { say "ERROR: offload is set for '$wm', not '$m': run './k8s-side.sh offload on'"; exit 1; }
+    case "$wd" in *"$NODE"*reverse-forwards*) ;; *) say "ERROR: offload is off or set without the tunnel: run './k8s-side.sh offload on'"; exit 1;; esac
     tests="$*"; [ -n "$tests" ] || tests="$(ls "$N" | sed -n 's/^\([0-9][0-9]\)-.*\.yaml$/\1/p' | tr '\n' ' ')"
-    RUN="$(date +%Y%m%d-%H%M%S)"; OUT="$HERE/results/$RUN-$m"; mkdir -p "$OUT"
+    RUN="$(date +%Y%m%d-%H%M%S)"; OUT="$HERE/results/$RUN"; mkdir -p "$OUT"
     bash "$0" reset-data || exit 1
     gs || exit 1
-    say "run $RUN, mode $m (interLink $(il_version)): tests $tests -> $OUT"
-    echo "mode $m, interLink $(il_version), partition $SLURM_PARTITION" >"$OUT/summary.txt"
+    say "run $RUN (interLink $(il_version), reverse tunnel): tests $tests -> $OUT"
+    echo "interLink $(il_version) with the reverse tunnel, partition $SLURM_PARTITION" >"$OUT/summary.txt"
     printf 'test\tpod\tkubernetes node\tslurm job\tpartition\tcompute node\tslurm state\n' >"$OUT/where.tsv"
     # The configuration of both sides as this run uses it ('evidence' later sees only what is on then).
     mkdir -p "$OUT/config"; cp "$CONF"/*.yaml "$OUT/config/" 2>/dev/null
@@ -911,10 +838,10 @@ YAML
 
   evidence:*)
     shift
-    run="${1:-$(ls -td "$HERE"/results/*-split "$HERE"/results/*-reverse 2>/dev/null | head -n 1)}"
+    run="${1:-$(ls -td "$HERE"/results/2*/ 2>/dev/null | head -n 1)}"
     run="$HERE/results/$(basename "$run")"
     [ -f "$run/summary.txt" ] || { say "ERROR: no run in $run"; exit 1; }
-    id="$(basename "$run")"; id="${id%-*}"                     # 20261124-011219 (local time)
+    id="$(basename "$run")"; id="${id:0:15}"                   # 20261124-011219 (local time)
     since="${id:0:4}-${id:4:2}-${id:6:2}T${id:9:2}:${id:11:2}:${id:13:2}"
     t0="$(date -u -d "${since/T/ }" +%Y-%m-%dT%H:%M:%S)"     # the logs are in UTC
     t1="$(date -u -d "@$(( $(date -r "$run/summary.txt" +%s) + 300 ))" +%Y-%m-%dT%H:%M:%S)"
@@ -923,7 +850,7 @@ YAML
     { cat "$STATE/mode" 2>/dev/null || echo none; } >"$E/ulisses/mode-now"
     go="$(ls -d "$TRIAL_HOME"/go-*/bin/go 2>/dev/null | tail -n 1)"
     {
-      for v in "$SPLIT_IL_VERSION" "$REVERSE_IL_VERSION"; do
+      for v in "$IL_VERSION"; do
         echo "== interLink $v, tag commit: $(git ls-remote https://github.com/interlink-hq/interLink "refs/tags/$v" 2>/dev/null | cut -c1-40)"
         for b in interlink virtual-kubelet; do
           f="$(il_dir "$v")/$b"; [ -x "$f" ] || continue
@@ -935,7 +862,7 @@ YAML
       kubectl version 2>/dev/null
     } >"$E/ulisses/versions.txt" 2>&1
     # interLink's lines of the run only, with every Secret's data and every service-account token blanked.
-    for p in il-vk il-api il-tunnel relay-agent relay-tunnel; do
+    for p in il-vk il-api il-tunnel; do
       [ -s "$LOGD/$p.log" ] || continue
       awk -v a="$t0" -v b="$t1" 'match($0, /time="[^"]*"/) { t = substr($0, RSTART + 6, 19); if (t >= a && t <= b) print }' "$LOGD/$p.log" \
         | sed -E -e 's/(\\*"data\\*":\{)[^}]*/\1<redacted>/g' -e 's/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/<token>/g' >"$E/ulisses/$p.log"
@@ -974,8 +901,9 @@ TXT
 
   clean:)
     argo delete -n "$NS" -l "$LABEL" 2>&1 | tail -n 20
-    # interLink removes a pod's job folder when it deletes the pod. Wait for that, so that a mode switch
-    # or 'restore' right after does not stop interLink first and leave job folders (keys, tokens) behind.
+    argo delete -n "$NS" -l split-trial=true >/dev/null 2>&1   # their label in the two-mode version
+    # interLink removes a pod's job folder when it deletes the pod. Wait for that, so that 'down' or
+    # 'restore' right after does not stop interLink first and leave job folders (keys, tokens) behind.
     if proc_up il-vk; then
       for _ in $(seq 1 40); do
         [ -z "$(kubectl get pods -A --field-selector "spec.nodeName=$NODE" --no-headers 2>/dev/null)" ] && break
@@ -983,28 +911,21 @@ TXT
       done
     fi
     left="$(kubectl get pods -A --field-selector "spec.nodeName=$NODE" --no-headers 2>/dev/null | wc -l)"
-    if [ "$left" -eq 0 ]; then say "trial workflows deleted, no pod left on $NODE: interLink removed their job folders"
+    if [ "$left" -eq 0 ]; then say "test workflows deleted, no pod left on $NODE: interLink removed their job folders"
     else say "WARNING: $left pods still on $NODE; their job folders stay on the login node until interLink deletes them"; fi
     ;;
 
   restore:)
-    bash "$0" offload off
-    # The login node first, as when switching modes.
-    hm="$(hpc_mode)"
-    case "$hm" in
-      none) say "login node: no mode on";;
-      split|reverse) hpc disable || say "WARNING: could not switch '$hm' off on the login node: run './k8s-side.sh hpc disable'";;
-      *) say "WARNING: login node: $hm";;
-    esac
+    bash "$0" clean
+    bash "$0" down
     hpc uninstall || say "WARNING: could not stop the sidecar on the login node: run './k8s-side.sh hpc uninstall'"
-    bash "$0" api off
     kubectl delete node "$NODE" --ignore-not-found >/dev/null && say "virtual node $NODE deleted"
     for c in $(kubectl get csr -o name 2>/dev/null | grep "/vk-$NODE-"); do kubectl delete "$c" >/dev/null; done
     if [ -f "$STATE/artifact-repositories.yaml" ]; then
       kubectl replace -f "$STATE/artifact-repositories.yaml" >/dev/null \
         && rm -f "$STATE/artifact-repositories.yaml" && say "artifact-repositories ConfigMap restored"
     fi
-    say "Argo, namespace $NS and $TRIAL_HOME stay (rm -rf $TRIAL_HOME removes the binaries, configs and logs)"
+    say "Argo, namespace $NS, the MinIO (if any; 'minio off') and $TRIAL_HOME stay"
     ;;
 
   *) awk 'NR > 1 && !/^#/ {exit} NR > 1' "$0"; exit 2;;

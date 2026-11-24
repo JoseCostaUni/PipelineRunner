@@ -1,5 +1,11 @@
 # Experiment: interLink 0.6.3's reverse tunnel instead of the split executor
 
+This is the record of the first trial of interLink 0.6.3 on the testbed (16-17 Nov 2026), and the
+plugin patch to propose upstream (`upstream/`). The approach it tried is now the only one in this
+repository, and runs with `../../deploy/deucalion` everywhere, the testbed included. The experiment's
+own runner (`run.sh`, `guest/`) worked by switching the testbed's installation of Isabel's prototype
+to 0.6.3 and back. It was removed on 24 Nov 2026 and is in the tag `split-interlink-0.6.1`.
+
 **Question.** Can plain Argo workflows run on an air-gapped compute node with stock interLink
 0.6.3 and its Slurm plugin 0.6.3, without the split executor's wrappers?
 
@@ -31,8 +37,8 @@ shadow pod on ulisses (ssh-reverse) <──────────────�
   ignores `subPath` on emptyDir volumes, which Argo uses for every input artifact. `upstream/` has
   the plugin patch (a few lines and a unit test) to propose; once released, no wrapper is left.
 - **Configuration only, everything else:**
-  - virtual kubelet: `Network.EnableTunnel`, `ShadowMode: ssh`, `SSH.Reverse` (see
-    `guest/ulisses.sh reverse on`), and `KubernetesApiAddr: kubernetes.default.svc.cluster.local`,
+  - virtual kubelet: `Network.EnableTunnel`, `ShadowMode: ssh`, `SSH.Reverse` (now written by
+    `../../deploy/deucalion/k8s-side.sh`, `il_config`), and `KubernetesApiAddr: kubernetes.default.svc.cluster.local`,
     `KubernetesApiPort: 6443`, so the executor reaches the API through the tunnel;
   - Argo `workflowDefaults`: the pod annotation `interlink.eu/reverse-forwards:
     "minio.default.svc.cluster.local:9000 6443:kubernetes.default.svc.cluster.local:443"`, so
@@ -41,38 +47,22 @@ shadow pod on ulisses (ssh-reverse) <──────────────�
     --contain`, pre-pulled images (`ImagePrefix`).
 
 The Global Storage (MinIO in Docker on ulisses) gets a Service name, because the tunnel maps names,
-not IPs. `ulisses.sh` also adds a NAT rule for shadow pods, written for Calico's default pod range;
+not IPs. The experiment's `ulisses.sh` also added a NAT rule for shadow pods, written for Calico's default pod range;
 it turned out not to be needed, because Calico picked 172.16.0.0/16 on the testbed and a pod reaches
 the login node without it (checked on 17 Nov 2026).
 
-**On Deucalion** this mode is run with the trial scripts, not with this folder:
-`../../deploy/deucalion/k8s-side.sh mode reverse` (steps in `../../HOW_TO_RUN.md`, section 2). They
-make the same changes, for any CPU architecture, with Isabel's MinIO under a Service name, and they
-delete the SSH key Secret and interLink's copies of it when the mode is switched off.
+## Running it now
 
-## Running it (on the Mac)
+On the testbed, from the repository root: `make init`, then `make test` (`../../HOW_TO_RUN.md`,
+section 1). On Deucalion: `../../RUN_ON_ULISSES.md`. Both make the same changes as this experiment did,
+for any CPU architecture, and they delete the SSH key Secret and interLink's copies of it in
+`make restore`.
 
-From the repository root, `make init-new` runs `install` and `enable`, `make test` runs the tests
-and `make init-old` runs `disable`. The same steps by hand:
-
-```sh
-cd experiments/reverse-tunnel   # from the repository root
-./run.sh install          # once: interLink 0.6.3 on ulisses (built from the tag if no release
-                          # binaries: the 0.6.3 release has none yet), plugin 0.6.3 on login
-./run.sh enable           # switch both sides to 0.6.3 + reverse tunnel
-./run.sh test 00          # one workflow with an input and an output artifact
-./run.sh test             # all plain-Argo tests (TC00-TC10, TC08 not ported)
-./run.sh diag             # shadow pods and their logs, virtual kubelet log, plugin settings
-./run.sh disable          # back to Isabel's 0.6.1 and her settings
-```
-
-Results go to `results/<time>/`: `summary.txt` (one line per test: PASS/FAIL, phase, time,
-checks against Argo **and** the Global Storage), `argo/` and `jobs/` (Argo objects, job folders),
-and `diag-TC<n>.txt` for every test that failed. Logs of each step are in `results/<time>/run.log`.
-
-`install` and `enable` leave Isabel's 0.6.1 files in place: 0.6.3 runs through systemd drop-ins
-and backups of the two configuration files (`VirtualKubeletConfig.yaml.pre-rt`,
-`SlurmConfig.yaml.pre-rt`), which `disable` puts back.
+The experiment's results are in `results/<time>/` on the Mac where it ran (not versioned):
+- `summary.txt`: one line per test, with PASS/FAIL, the phase, the time, and the checks against Argo
+  **and** the Global Storage;
+- `argo/` and `jobs/`: the Argo objects and the job folders;
+- `diag-TC<n>.txt` for every test that failed, and `run.log`.
 
 ## What to compare with the split executor (T1)
 
@@ -85,15 +75,15 @@ and backups of the two configuration files (`VirtualKubeletConfig.yaml.pre-rt`,
 | Throughput | login node's network | Slurm I/O forwarding (srun carrier) |
 | Isolation | same account, job folders hold keys | same, plus a relay that only accepts the job's user |
 
-Measure at least: pass/fail per test, time per test against T1 (`../../testbed/logs/t1-*`),
-and the time of TC06/TC10 with a larger artifact to see the srun carrier's throughput (not done
-yet).
+Measured: pass/fail and time per test against T1 (`../../APPROACH.md`, sections 4 and 6). Not
+measured yet: the time of TC06/TC10 with a larger artifact, to see the srun carrier's throughput
+(`../../NEXT_STEPS.md`).
 
 ## Results
 
 Run on the testbed on 16 and 17 November 2026. interLink 0.6.3 had to be built from its tag (the
 release has no binaries), and Isabel's configuration files worked with the 0.6.3 binaries. The
-first runs found three problems, all fixed in this folder and in `setup/hpc/subpath-fix`:
+first runs found three problems, all fixed in this folder (now carried by `../../deploy/deucalion`) and in `setup/hpc/subpath-fix`:
 
 1. the plugin refused a `SocketDirRoot` under `.interlink` (no path element may start with a dot);
 2. plugin 0.6.3 reports the free memory it sees as the virtual node's capacity, which fell to
@@ -105,6 +95,4 @@ first runs found three problems, all fixed in this folder and in `setup/hpc/subp
 
 After the fixes all ten tests passed: TC00-TC04, TC06 and TC07 in `20261117-011154`, TC09 and TC10
 in `20261117-022804`, TC05 in `20261117-024031`. The same mode then passed through the Deucalion
-scripts, see `../../APPROACH.md`, section 7.
-
-`./run.sh diag` and `results/<time>/run.log` are the first places to look.
+scripts, and later on Deucalion: `../../APPROACH.md`, section 4.

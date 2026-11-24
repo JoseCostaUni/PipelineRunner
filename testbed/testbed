@@ -1,14 +1,13 @@
 #!/bin/bash
 # testbed: a small Deucalion-like HPC environment on a Mac (Apple Silicon), built with Lima.
-# (The Makefile next to this script wraps these commands; run 'make' to see them.)
+# (The Makefile at the repository root wraps these commands; run 'make' there to see them.)
 #
 #   ./testbed up            Stage A: create the login and compute node VMs
 #   ./testbed check         fidelity checks; report in logs/check-<time>.md
 #   ./testbed up-b          Stage B: add 'ulisses' (Kubernetes side + MinIO) using Isabel's scripts
-#   ./testbed t0 [modes]    test T0: Isabel's tests TC01-TC10 in each mode
-#                           (default: dev normal normal-images); report in logs/t0-<time>/
-#   ./testbed t1 [modes]    test T1: plain Argo workflows (TC00 + Isabel's tests) with the split
-#                           executor, compute node offline (default: normal-images); logs/t1-<time>/
+#   ./testbed trial setup   the user who runs deploy/deucalion as on Ulisses (no root), this repository
+#                           in its home, 'make setup' as that user
+#   ./testbed trial make T  'make T' of deploy/deucalion as that user (ENV_FILE=testbed.env)
 #   ./testbed net dev       compute node WITH internet   (like Deucalion dev-* partitions)
 #   ./testbed net normal    compute node WITHOUT internet (like Deucalion normal-* partitions)
 #   ./testbed net status    show the current mode
@@ -33,7 +32,7 @@ GUEST="$TBDIR/guest"
 # Isabel Moutinho's repository (FEUP prototype), used unchanged except for CPU architecture names.
 # It sits next to José's fork, which holds this folder.
 LPR_DIR="${LPR_DIR:-$TBDIR/../../lisa-pipeline-runner}"
-# José's fork, for the split executor (T2): setup/hpc/split-executor.
+# José's fork, this repository: its tests/argo-native go to ulisses.
 ZE_DIR="${ZE_DIR:-$TBDIR/..}"
 
 PREFIX="tb"
@@ -209,10 +208,6 @@ sync_vm() {
     vsh "$n" mkdir -p /tmp/tb-sync/lpr
     limactl copy -r "$LPR_DIR/setup" "$LPR_DIR/tests" "$v:/tmp/tb-sync/lpr/"
   fi
-  if [ "$n" != cn ] && [ -d "$ZE_DIR/setup/hpc/split-executor" ]; then
-    vsh "$n" mkdir -p /tmp/tb-sync/ze
-    limactl copy -r "$ZE_DIR/setup/hpc/split-executor" "$v:/tmp/tb-sync/ze/"
-  fi
   if [ "$n" = ulisses ] && [ -d "$ZE_DIR/tests/argo-native" ]; then
     vsh "$n" mkdir -p /tmp/tb-sync/ze
     limactl copy -r "$ZE_DIR/tests/argo-native" "$v:/tmp/tb-sync/ze/"
@@ -232,14 +227,14 @@ refresh() {
   for n in $(running_vms); do vroot "$n" refresh.sh; done
 }
 
-# Only one of check / t0 / clean at a time: each switches the compute node's network mode, so
+# Only one of check / clean at a time: each switches the compute node's network mode, so
 # running two together silently mixes their results.
 take_lock() {
   local f="$STATE/.lock" p
   if [ -f "$f" ]; then
     p="$(cat "$f" 2>/dev/null)"
     if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then
-      die "another testbed command is running (pid $p: check, t0 or clean). Wait for it, or stop it first."
+      die "another testbed command is running (pid $p: check or clean). Wait for it, or stop it first."
     fi
   fi
   echo $$ >"$f"
@@ -309,7 +304,7 @@ cmd_up_b() {
     die "interlink-node is not Ready. Diagnostics above (and in logs/diag-$TS.txt)"
   fi
   vroot cn netmode.sh normal >/dev/null
-  info "Stage B is up. Next: ./testbed check, then ./testbed t0"
+  info "Stage B is up. Next: ./testbed check, then 'make init' in the repository root"
 }
 
 cmd_diag() {
@@ -337,33 +332,17 @@ cmd_stop() {
 cmd_down() {
   local n
   for n in $(present_vms); do limactl delete -f "$(vm "$n")"; done
-  info "VMs deleted (state/, cache/ and logs/ kept; 'make up' and 'make up-b' rebuild them)"
+  info "VMs deleted (state/, cache/ and logs/ kept; 'make init' at the repository root rebuilds them)"
 }
 
 # Back to a just-provisioned state without rebuilding: no workflows, Jobs, Slurm jobs, job
-# folders, test data, pre-pulled images, Singularity caches or T0 results in the VMs; Global
-# Storage reset to the test datasets; compute node 'normal'; images from docker://.
-# T0 results that never reached the Mac (an interrupted run) live only in the VMs' /var/tmp.
-save_leftovers() {
-  local n d="$LOGS/clean-$TS-saved"
-  for n in login ulisses; do
-    [ "$(vm_status "$n")" = Running ] || continue
-    if vsh "$n" sudo sh -c 'ls -d /var/tmp/t[01]-*-[0-9]* >/dev/null 2>&1'; then
-      mkdir -p "$d"
-      vsh "$n" sudo sh -c 'cd /var/tmp && tar czf /tmp/tb-saved.tgz t[01]-*-[0-9]* && chmod 644 /tmp/tb-saved.tgz'
-      limactl copy "$(vm "$n"):/tmp/tb-saved.tgz" "$d/$n-var-tmp-tests.tgz"
-      vsh "$n" sudo rm -f /tmp/tb-saved.tgz
-    fi
-  done
-  if [ -d "$d" ]; then info "T0/T1 results found in the VMs were saved to logs/$(basename "$d")/"; fi
-}
+# folders, pre-pulled images or Singularity caches in the VMs; compute node 'normal'.
 
 cmd_clean() {
   preflight
   take_lock
   local n
-  [ -n "$(running_vms)" ] || die "no testbed VM is running (make vm-start)"
-  save_leftovers
+  [ -n "$(running_vms)" ] || die "no testbed VM is running (make start)"
   for n in $(running_vms); do sync_vm "$n"; done
   # ulisses first: removing the pods makes interLink cancel their Slurm jobs.
   for n in ulisses login cn; do
@@ -549,327 +528,46 @@ cmd_check() {
   [ "$NFAIL" -eq 0 ]
 }
 
-# ---------------------------------------------------------------------------- test T0
-# Isabel's tests in three modes:
-#   dev            compute node with internet, her configuration (the baseline, as on dev-x86)
-#   normal         compute node without internet, her configuration
-#   normal-images  compute node without internet, container images pulled beforehand on the login
-#                  node (only the sidecar's ImagePrefix changes), to isolate the data transfers
-# Override to run a subset, e.g.  T0_TESTS="10" ./testbed t0 dev
-T0_TESTS="${T0_TESTS:-01 02 03 04 05 06 07 08 09 10}"
-
-cmd_t0() {
-  preflight
-  take_lock
-  require_running cn login ulisses
-  local modes="$*" run mode net prefix t line mode0
-  [ -n "$modes" ] || modes="dev normal normal-images"
-  for mode in $modes; do case "$mode" in dev|normal|normal-images) ;; *) die "unknown mode '$mode' (dev, normal, normal-images)";; esac; done
-  run="$TS"
-  local out="$LOGS/t0-$run"
-  mkdir -p "$out"
-  local n
-  for n in cn login ulisses; do sync_vm "$n"; done
-  mode0="$(vroot cn netmode.sh get)"
-  vroot ulisses probe.sh k8s-node >/dev/null || die "interlink-node is not Ready (./testbed status)"
-
-  info "T0 run $run, modes: $modes (about 15-30 minutes per mode)"
-  fg_step t0-prepare-images vroot login t0-login.sh prepare-images
-
-  for mode in $modes; do
-    case "$mode" in
-      dev) net=dev; prefix=docker;;
-      normal) net=normal; prefix=docker;;
-      normal-images) net=normal; prefix=images;;
-    esac
-    info "mode '$mode': compute node $net, images from $prefix"
-    # Start each mode from an empty queue: no Jobs still retrying, no Slurm jobs, no job folders.
-    vroot ulisses clean.sh jobs >>"$out/t0.log" 2>&1 || true
-    vroot login clean.sh jobs >>"$out/t0.log" 2>&1 || true
-    vroot cn netmode.sh "$net" >/dev/null
-    vroot login t0-login.sh set-prefix "$prefix" >>"$out/t0.log" 2>&1
-    vroot ulisses t0-ulisses.sh reset-data >>"$out/t0.log" 2>&1
-    vroot login t0-login.sh reset-data >>"$out/t0.log" 2>&1
-    vroot login t0-login.sh watch-start "$run" "$mode" >>"$out/t0.log" 2>&1
-    for t in $T0_TESTS; do
-      line="$(vroot ulisses t0-ulisses.sh run "$run" "$mode" "$t" 2>>"$out/t0.log" | tail -n 1)" \
-        || line="ERROR (see logs/t0-$run/t0.log); continuing"
-      echo "   TC$t  $line"
-      # A failed Job keeps retrying in the background (backoffLimit 6) and would run into the next
-      # test: keep its folders, then remove it.
-      vroot login t0-login.sh copy-now "$run" "$mode" >>"$out/t0.log" 2>&1 || true
-      vroot ulisses clean.sh jobs >>"$out/t0.log" 2>&1 || true
-      vroot login clean.sh slurm >>"$out/t0.log" 2>&1 || true
-    done
-    vroot login t0-login.sh watch-stop "$run" "$mode" >>"$out/t0.log" 2>&1
-  done
-
-  info "restoring: compute node '$mode0', images from docker://"
-  vroot cn netmode.sh "$mode0" >/dev/null
-  vroot login t0-login.sh set-prefix docker >>"$out/t0.log" 2>&1
-
-  info "collecting results"
-  vroot ulisses t0-ulisses.sh pack "$run" >>"$out/t0.log" 2>&1
-  vroot login t0-login.sh pack "$run" >>"$out/t0.log" 2>&1
-  limactl copy "$(vm ulisses):/var/tmp/t0-argo-$run.tar.gz" "$out/"
-  limactl copy "$(vm login):/var/tmp/t0-jobs-$run.tar.gz" "$out/"
-  ( cd "$out" && tar xzf "t0-argo-$run.tar.gz" && tar xzf "t0-jobs-$run.tar.gz" && rm -f ./*.tar.gz )
-  t0_report "$out" "$modes" >"$out/report.md"
-  info "report: logs/t0-$run/report.md"
+# ---------------------------------------------------------------------------- trial
+# The Deucalion scripts (deploy/deucalion) run here as on Ulisses: as a user without root on ulisses
+# (a cluster-admin kubeconfig through a ServiceAccount token, guest/trial-user.sh) and as 'lisa' on the
+# login node, with deploy/deucalion/testbed.env.example as settings.
+TRIAL_USER="${TRIAL_USER:-jcosta}"
+trial_make() { # make targets of deploy/deucalion as the trial user, with ENV_FILE=testbed.env
+  local s
+  s="$(mktemp)"
+  { printf 'cd ~/PipelineRunner/deploy/deucalion && make'; printf ' %q' "$@"; printf ' ENV_FILE=testbed.env\n'; } >"$s"
+  limactl copy "$s" "$(vm ulisses):/tmp/trial-make.sh"; rm -f "$s"
+  vsh ulisses chmod 644 /tmp/trial-make.sh   # mktemp's 600 would keep the trial user out
+  limactl shell --workdir / "$(vm ulisses)" sudo -u "$TRIAL_USER" -i bash /tmp/trial-make.sh
 }
-
-# Build the markdown report from argo/<mode>/steps.tsv and jobs/<mode>/jobs.tsv.
-t0_report() {
-  local out="$1" modes="$2" mode
-  echo "# Test T0: FEUP prototype tests on the testbed"
-  echo
-  echo "Run $(basename "$out"). Modes: dev = compute node with internet (baseline);"
-  echo "normal = no internet; normal-images = no internet, images pulled beforehand on the login node."
-  echo
-  echo "## Workflows"
-  echo
-  printf '| Test |'; for mode in $modes; do printf ' %s |' "$mode"; done; echo
-  printf '|---|'; for mode in $modes; do printf '%s' '---|'; done; echo
-  cat "$out"/argo/*/steps.tsv 2>/dev/null | awk -F'\t' -v modes="$modes" '
-    { key=$2 SUBSEP $1 }
-    $3=="(workflow)" { wf[key]=$4; tests[$2]=1; next }
-    $4=="Succeeded" { ok[key]++ }
-    { tot[key]++ }
-    END {
-      n=split(modes, M, " ")
-      for (t=1; t<=10; t++) {
-        id=sprintf("%02d", t); if (!(id in tests)) continue
-        line="| TC" id " |"
-        for (i=1; i<=n; i++) { k=id SUBSEP M[i]
-          if (k in wf) line=line " " wf[k] " (" ok[k]+0 "/" tot[k]+0 " steps ok) |"; else line=line " - |" }
-        print line
-      }
-    }'
-  echo
-  echo "TC02 and TC08 contain steps that are meant to fail (missing file, user isolation), so compare"
-  echo "each mode with the dev baseline rather than with 'Succeeded'."
-  echo
-  echo "## HPC jobs by outcome"
-  echo
-  echo "Classified from each Slurm job's output (job.out) on the shared file system."
-  echo
-  echo "SYNC_OUT_SILENT: the upload failed (mc printed an error) but mc exited 0, so the wrapper said 'complete'."
-  echo
-  echo "| Mode | OK | IMAGE_PULL | DATA_SYNC_IN | DATA_SYNC_OUT | SYNC_OUT_SILENT | TASK_ERROR | OTHER |"
-  echo "|---|---|---|---|---|---|---|---|"
-  for mode in $modes; do
-    awk -F'\t' -v m="$mode" '{c[$3]++} END {printf "| %s | %d | %d | %d | %d | %d | %d | %d |\n", m, c["OK"], c["IMAGE_PULL"], c["DATA_SYNC_IN"], c["DATA_SYNC_OUT"], c["SYNC_OUT_SILENT"], c["TASK_ERROR"], c["OTHER"]}' \
-      "$out/jobs/$mode/jobs.tsv" 2>/dev/null || echo "| $mode | (no data) | | | | | | |"
-  done
-  echo
-  echo "## HPC jobs that failed while Kubernetes reported their pod as Succeeded"
-  echo
-  echo "Joined on the pod UID (job folder default-<uid>) from argo/<mode>/pods.tsv and jobs/<mode>/jobs.tsv."
-  echo "Any row here is a false success: Argo moves on as if the step had worked."
-  echo
-  echo "| Mode | Test | Pod | HPC outcome | Kubernetes | URIs |"
-  echo "|---|---|---|---|---|---|"
-  for mode in $modes; do
-    [ -f "$out/argo/$mode/pods.tsv" ] && [ -f "$out/jobs/$mode/jobs.tsv" ] || continue
-    awk -F'\t' 'FNR==NR {p[$3]=$0; next}
-      { uid=$2; sub(/^default-/, "", uid); if (!(uid in p)) next
-        split(p[uid], a, "\t")
-        if ($3 != "OK" && a[5] == "Succeeded")
-          printf "| %s | TC%s | %s | %s | %s (exit %s) | %s |\n", $1, a[2], a[4], $3, a[5], a[6], a[8] }' \
-      "$out/argo/$mode/pods.tsv" "$out/jobs/$mode/jobs.tsv"
-  done
-  echo
-  echo "Global Storage content after each test: argo/<mode>/<test>.minio.txt."
-  echo
-  echo "## Example evidence per outcome"
-  for mode in $modes; do
-    echo
-    echo "### $mode"
-    echo
-    awk -F'\t' '!seen[$3]++ && $3!="OK" {printf "- **%s** (%s): `%s`\n", $3, $2, $4}' "$out/jobs/$mode/jobs.tsv" 2>/dev/null || true
-  done
-  echo
-  echo "## Steps"
-  for mode in $modes; do
-    echo
-    echo "### $mode"
-    echo
-    echo "| Test | Step | Phase | Message |"
-    echo "|---|---|---|---|"
-    awk -F'\t' '{gsub(/\|/, "/", $5); printf "| TC%s | %s | %s | %s |\n", $2, $3, $4, substr($5, 1, 120)}' "$out/argo/$mode/steps.tsv" 2>/dev/null || true
-  done
-}
-
-# ---------------------------------------------------------------------------- test T1
-# Plain Argo workflows with native artifacts on the offline compute node, with the split executor
-# (lisa-pipeline-runner_ze/setup/hpc/split-executor): Argo's init and wait run on the login node,
-# only main in the Slurm job. The login node cannot open connections to ulisses (loginnet.sh), so
-# their Kubernetes API calls go through the relay that ulisses pulls over its own SSH tunnel.
-# The workflows (lisa-pipeline-runner_ze/tests/argo-native) are submitted as written; the platform
-# sends them to interLink (Argo workflowDefaults). Every test is checked in Argo and in MinIO.
-#   TC00       one step with a native input and output artifact
-#   TC01-TC10  Isabel's tests as plain Argo workflows (TC08 not ported: see that folder's README)
-# Modes (default normal-images):
-#   normal-images  compute node without internet, images pulled beforehand on the login node
-#   normal         compute node without internet, images from docker://
-#   dev            compute node with internet, images from docker://
-# T1_TESTS="00 05" runs a subset. T1_SPLIT=off runs them through interLink as is (the "before").
-T1_TESTS="${T1_TESTS:-00 01 02 03 04 05 06 07 09 10}"
-T1_SPLIT="${T1_SPLIT:-on}"
-
-t1_restore() {
-  [ -n "${T1_MODE0:-}" ] && vroot cn netmode.sh "$T1_MODE0" >/dev/null 2>&1 || true
-  vroot ulisses t1-ulisses.sh offload off >>"${T1_LOG:-/dev/null}" 2>&1 || true
-  if [ "$T1_SPLIT" = on ]; then
-    vroot login split-login.sh relay-log >"${T1_OUT:-/tmp}/relay-login.log" 2>/dev/null || true
-    vroot ulisses split-ulisses.sh relay-log >"${T1_OUT:-/tmp}/relay-agent.log" 2>/dev/null || true
-    vroot login split-login.sh disable >>"${T1_LOG:-/dev/null}" 2>&1 || true
-    vroot ulisses split-ulisses.sh api off >>"${T1_LOG:-/dev/null}" 2>&1 || true
-  fi
-  vroot login t0-login.sh set-prefix docker >>"${T1_LOG:-/dev/null}" 2>&1 || true
-  vroot login t1-login.sh cmdprefix on >>"${T1_LOG:-/dev/null}" 2>&1 || true
-}
-
-cmd_t1() {
-  preflight
-  take_lock
-  require_running cn login ulisses
-  local modes="$*" run mode net prefix line out n exec_img api t uids pods
-  [ -n "$modes" ] || modes="normal-images"
-  for mode in $modes; do case "$mode" in dev|normal|normal-images) ;; *) die "unknown mode '$mode' (normal-images, normal, dev)";; esac; done
-  case "$T1_SPLIT" in on|off) ;; *) die "T1_SPLIT must be on or off";; esac
-  [ -d "$ZE_DIR/tests/argo-native" ] || die "tests not found at $ZE_DIR/tests/argo-native (set ZE_DIR=...)"
-  [ "$T1_SPLIT" = off ] || [ -d "$ZE_DIR/setup/hpc/split-executor" ] || die "split executor not found at $ZE_DIR/setup/hpc/split-executor"
-  run="$TS"
-  out="$LOGS/t1-$run"
-  mkdir -p "$out"
-  T1_OUT="$out"
-  T1_LOG="$out/t1.log"
-  for n in cn login ulisses; do sync_vm "$n"; done
-  T1_MODE0="$(vroot cn netmode.sh get)"
-  trap 't1_restore; rm -f "$STATE/.lock"' EXIT
-  vroot ulisses probe.sh k8s-node >/dev/null || die "interlink-node is not Ready (./testbed status)"
-  vroot login loginnet.sh apply >/dev/null
-
-  info "T1 run $run, modes: $modes, split executor: $T1_SPLIT, tests: $T1_TESTS"
-  fg_step t1-setup vroot ulisses t1-ulisses.sh setup
-  exec_img="$(vroot ulisses t1-ulisses.sh executor-image | tail -n 1)"
-  info "argoexec image: $exec_img"
-  fg_step t1-prepare-images vroot login t1-login.sh prepare-images "$exec_img"
-  vroot login t1-login.sh cmdprefix off >>"$T1_LOG" 2>&1
-  if [ "$T1_SPLIT" = on ]; then
-    api="$(vroot login split-login.sh api-check | tail -n 1)"
-    info "login node -> Kubernetes API on ulisses: $api (000: blocked, as on Deucalion); API calls go through the relay"
-    fg_step t1-split vroot login split-login.sh enable
-    fg_step t1-relay-login vroot login split-login.sh relay on
-    fg_step t1-relay-ulisses vroot ulisses split-ulisses.sh api relay
-    fg_step t1-relay-health vroot ulisses split-ulisses.sh relay-health
-  fi
-  vroot ulisses t1-ulisses.sh offload on >>"$T1_LOG" 2>&1
-
-  for mode in $modes; do
-    case "$mode" in
-      dev) net=dev; prefix=docker;;
-      normal) net=normal; prefix=docker;;
-      normal-images) net=normal; prefix=images;;
-    esac
-    info "mode '$mode': compute node $net, images from $prefix"
-    vroot ulisses clean.sh jobs >>"$T1_LOG" 2>&1 || true
-    vroot login clean.sh jobs >>"$T1_LOG" 2>&1 || true
-    vroot cn netmode.sh "$net" >/dev/null
-    vroot login t0-login.sh set-prefix "$prefix" >>"$T1_LOG" 2>&1
-    vroot ulisses t1-ulisses.sh reset-data >>"$T1_LOG" 2>&1
-    for t in $T1_TESTS; do
-      line="$(vroot ulisses t1-ulisses.sh run "$run" "$mode" "$t" 2>>"$T1_LOG" | tail -n 1)"
-      [ -n "$line" ] || line="no result (see logs/t1-$run/t1.log)"
-      echo "   TC$t  $line"
-      uids="$(vroot ulisses t1-ulisses.sh pods "$run" "$mode" "$t" 2>/dev/null | awk '{print $2}' | tr '\n' ' ')"
-      pods=""
-      # shellcheck disable=SC2086
-      [ -n "$uids" ] && pods="$(vroot login t1-login.sh collect-test "$run" "$mode/TC$t" $uids 2>>"$T1_LOG")" || true
-      echo "$pods" >>"$T1_LOG"
-      case "$line" in PASS*) ;; *) [ -n "$pods" ] && echo "$pods" | sed 's/^/          /';; esac
-      vroot ulisses t1-ulisses.sh delete "$run" "$mode" "$t" >>"$T1_LOG" 2>&1 || true
-      vroot login clean.sh slurm >>"$T1_LOG" 2>&1 || true
-    done
-  done
-
-  info "restoring: compute node '$T1_MODE0', interLink and Argo settings as before"
-  t1_restore
-  T1_MODE0=""
-
-  info "collecting results"
-  vroot ulisses t1-ulisses.sh pack "$run" >>"$T1_LOG" 2>&1
-  vroot login t1-login.sh pack "$run" >>"$T1_LOG" 2>&1
-  limactl copy "$(vm ulisses):/var/tmp/t1-argo-$run.tar.gz" "$out/"
-  limactl copy "$(vm login):/var/tmp/t1-jobs-$run.tar.gz" "$out/"
-  mkdir -p "$out/argo" "$out/jobs"
-  ( cd "$out" && tar xzf "t1-argo-$run.tar.gz" -C argo && tar xzf "t1-jobs-$run.tar.gz" -C jobs && rm -f ./*.tar.gz )
-  t1_report "$out" "$modes" >"$out/report.md"
-  info "report: logs/t1-$run/report.md"
-}
-
-# Report: one row per test, where its containers ran, every check, failed steps, API calls.
-t1_report() {
-  local out="$1" modes="$2" mode d t
-  echo "# Test T1: plain Argo workflows on an offline compute node"
-  echo
-  echo "Run $(basename "$out"). Split executor: $T1_SPLIT. Workflows from lisa-pipeline-runner_ze/tests/argo-native"
-  echo "(container templates with native artifacts), submitted as written. With the split executor,"
-  echo "init and wait run on the login node and main on the compute node; the login node cannot open"
-  echo "connections to ulisses, so the Kubernetes API is reached through the relay that ulisses pulls"
-  echo "over its own SSH tunnel. Every check is made against Argo and the Global Storage itself."
-  echo "TC08 (user isolation) is not ported."
-  echo
-  for mode in $modes; do
-    echo
-    echo "## $mode"
-    echo
-    echo "| Test | Workflow | Checks | Pods | main ran on | init/wait ran on | Steps |"
-    echo "|---|---|---|---|---|---|---|"
-    for d in "$out/argo/$mode"/TC*; do
-      [ -d "$d" ] || continue
-      t="$(basename "$d")"
-      printf '| %s | %s | %s/%s | %s | %s | %s | %s |\n' "$t" \
-        "$(awk -F'\t' '$2=="phase" {print $5; exit}' "$d/checks.tsv" 2>/dev/null)" \
-        "$(awk -F'\t' '$1=="PASS" {n++} END {print n+0}' "$d/checks.tsv" 2>/dev/null)" "$(awk 'END {print NR}' "$d/checks.tsv" 2>/dev/null)" \
-        "$(awk 'END {print NR}' "$d/pods.txt" 2>/dev/null)" \
-        "$(cat "$out/jobs/$mode/$t"/*/job/job.out 2>/dev/null | sed -n 's/.*submitted to SLURM node \([^.]*\)\..*/\1/p' | sort | uniq -c | awk '{printf "%s%s x%s", (NR>1?", ":""), $2, $1}')" \
-        "$(cat "$out/jobs/$mode/$t"/*/job/login.out 2>/dev/null | sed -n 's/.*init and wait on \([^,]*\),.*/\1/p' | sort | uniq -c | awk '{printf "%s%s x%s", (NR>1?", ":""), $2, $1}')" \
-        "$(awk -F'\t' '{printf "%s%s=%s", (NR>1?", ":""), $1, $2}' "$d/steps.tsv" 2>/dev/null)"
-    done
-    echo
-    echo "### Checks"
-    echo
-    echo "| Test | Result | Check | Expected | Got |"
-    echo "|---|---|---|---|---|"
-    for d in "$out/argo/$mode"/TC*; do
-      [ -f "$d/checks.tsv" ] || continue
-      awk -F'\t' -v t="$(basename "$d")" '{printf "| %s | %s | %s %s | %s | %s |\n", t, $1, $2, $3, $4, $5}' "$d/checks.tsv"
-    done
-    echo
-    echo "### Steps that did not succeed"
-    echo
-    for d in "$out/argo/$mode"/TC*; do
-      [ -f "$d/steps.tsv" ] || continue
-      awk -F'\t' -v t="$(basename "$d")" '$2!="Succeeded" {printf "- %s %s: %s %s\n", t, $1, $2, $3}' "$d/steps.tsv"
-    done
-  done
-  if [ -s "$out/relay-login.log" ]; then
-    echo
-    echo "## Kubernetes API calls through the relay (login side)"
-    echo
-    echo '```'
-    grep -E ' -> [0-9]+' "$out/relay-login.log" | awk '{$1=""; print}' | sed -E 's#/namespaces/[^/]+/#/ns/.../#; s#/(workflowtaskresults|pods)/[^ ]+#/\1/<name>#' | sort | uniq -c
-    echo '```'
-  fi
-  echo
-  echo "Evidence: argo/<mode>/TC*/ (workflow.json, pods.yaml, steps.tsv, checks.tsv, log-<pod>-<container>.txt,"
-  echo "minio.txt) and jobs/<mode>/TC*/<pod>/job/ (job.sh.orig, job.sh, login.out, split.log, *.out)."
+cmd_trial() {
+  case "${1:-}" in
+    setup)
+      local key t
+      limactl copy "$GUEST/trial-user.sh" "$(vm ulisses):/tmp/trial-user.sh"
+      key="$(vsh ulisses sudo bash /tmp/trial-user.sh "$TRIAL_USER" | tail -n 1)"
+      [ -n "$key" ] || die "could not create the trial user on ulisses"
+      vsh login sudo -u lisa bash -c "grep -qxF '$key' ~/.ssh/authorized_keys 2>/dev/null || echo '$key' >>~/.ssh/authorized_keys"
+      # This repository, as committed or not, without what only lives on the Mac: settings files
+      # (deucalion.env holds real keys), results, the testbed's own state, git.
+      t="$(mktemp)"
+      ( cd "$ZE_DIR" && COPYFILE_DISABLE=1 tar czf "$t" --exclude ./.git --exclude ./deploy/deucalion/results \
+          --exclude '*.env' --exclude .DS_Store --exclude ./testbed/cache --exclude ./testbed/state \
+          --exclude ./testbed/logs --exclude ./experiments/reverse-tunnel/results --exclude './*.pdf' . )
+      limactl copy "$t" "$(vm ulisses):/tmp/trial-repo.tgz"; rm -f "$t"
+      vsh ulisses sudo bash -c "R=/home/$TRIAL_USER/PipelineRunner; mkdir -p \$R && tar xzf /tmp/trial-repo.tgz -C \$R 2>/dev/null; \
+        [ -f \$R/deploy/deucalion/testbed.env ] || cp \$R/deploy/deucalion/testbed.env.example \$R/deploy/deucalion/testbed.env; \
+        chmod 600 \$R/deploy/deucalion/testbed.env; chown -R $TRIAL_USER: \$R; rm -f /tmp/trial-repo.tgz"
+      trial_make setup
+      ;;
+    make) shift; trial_make "$@" ;;
+    *) die "usage: $0 trial setup | trial make <targets of deploy/deucalion/Makefile>" ;;
+  esac
 }
 
 # ---------------------------------------------------------------------------- main
-usage() { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; }
 
 cmd="${1:-help}"
 [ $# -gt 0 ] && shift
@@ -877,9 +575,8 @@ case "$cmd" in
   up) cmd_up "$@";;
   up-b) cmd_up_b "$@";;
   check) cmd_check "$@";;
-  t0) cmd_t0 "$@";;
-  t1) cmd_t1 "$@";;
   diag) cmd_diag "$@";;
+  trial) cmd_trial "$@";;
   net) cmd_net "$@";;
   shell) cmd_shell "$@";;
   status) cmd_status "$@";;

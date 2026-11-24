@@ -1,9 +1,10 @@
 # Isabel Moutinho's tests as plain Argo workflows
 
-`../workflows/` (her tests) need her sync modules and resource templates. These are the same tests
-written the way a scientist writes any Argo workflow: container templates (`modules.yaml`, a
-WorkflowTemplate with her six compute modules) and **native artifacts** from and to the default
-artifact repository. Nothing in them refers to the HPC side; the platform sends them there.
+Her tests need her sync modules and resource templates (`tests/workflows/` in her repository, and in
+the tag `split-interlink-0.6.1` of this one). These are the same tests written the way a scientist
+writes any Argo workflow: container templates (`modules.yaml`, a WorkflowTemplate with her six compute
+modules) and **native artifacts** from and to the default artifact repository. Nothing in them refers
+to the HPC side; the platform sends them there (`../../deploy/deucalion`, `make test`).
 
 | Test | Hers | Here |
 |---|---|---|

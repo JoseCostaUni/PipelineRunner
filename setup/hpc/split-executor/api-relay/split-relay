@@ -1,8 +1,0 @@
-#!/bin/sh
-# Runs the split-relay binary for this machine: split-relay login|agent [flags]
-case "$(uname -m)" in
-  x86_64|amd64) a=amd64 ;;
-  aarch64|arm64) a=arm64 ;;
-  *) echo "split-relay: no binary for $(uname -m) (see build.sh)" >&2; exit 1 ;;
-esac
-exec "$(dirname "$0")/bin/split-relay-linux-$a" "$@"

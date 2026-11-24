@@ -6,7 +6,9 @@ Pipeline Runner, so experiments that need an HPC system can run locally and repe
 - **Stage A:** a login node and a compute node (the HPC side).
 - **Stage B:** adds `ulisses`, the Kubernetes side of the FEUP prototype (kubeadm, Argo, Dex,
   interLink) and its Global Storage (MinIO), all set up by Isabel Moutinho's own scripts.
-- **Test T0:** runs her ten test workflows with the compute node online and offline.
+- **The trial:** the scripts used on Deucalion (`../deploy/deucalion`) run here, as a user without
+  root on `ulisses` and as `lisa` on the login node. Plain Argo workflows then run on the offline
+  compute node through interLink 0.6.3 and its reverse tunnel.
 
 ## Requirements
 
@@ -18,37 +20,40 @@ Pipeline Runner, so experiments that need an HPC system can run locally and repe
 
 ## Usage
 
-The `Makefile` at the root of the repository is the main entry point: `make init-old` and
-`make init-new` build the VMs if needed and switch them between the two modes, and `make test` runs
-the tests of the mode that is on (see `../HOW_TO_RUN.md`, section 1). The `makefile` in this folder
-has the testbed's own targets; run `make` here to list them. The main ones:
+The `Makefile` at the root of the repository is the entry point (`make` there lists every target,
+`../HOW_TO_RUN.md` section 1 explains them):
 
 ```sh
-make vm-build          # Stage A (first time about 15 minutes)
+make init              # build the VMs if needed (Stage A, then B), the trial user, 'make setup'
 make test-check        # fidelity checks; report in logs/check-<time>.md
-make vm-build-ulisses  # Stage B (first time about 20-40 minutes, mostly downloads)
-make test-check        # now also checks ulisses, MinIO and the virtual node
-make test-t0           # test T0 (about 1-1.5 hours); report in logs/t0-<time>/report.md
-make report-t0         # print the latest T0 report
-make test-t1           # test T1: plain Argo workflows + split executor (about 25 minutes)
-make report-t1         # print the latest T1 report
+make test TESTS=00     # 'make up' and the tests, as the trial user
+make trial T=restore   # any target of deploy/deucalion/Makefile as the trial user
 
-make vm-status         # VMs, network mode, virtual node
+make status            # VMs, network mode, the trial's state
 make net-normal        # compute node without internet  (make net-dev: with internet)
 make ssh-login         # shell as lisa on the login node (ssh-compute, ssh-ulisses, ssh-*-root)
-make vm-stop           # stop everything, frees the RAM  (make vm-start to resume)
-make vm-clean          # remove what tests and checks left in the VMs (jobs, data, images, caches)
-make vm-remove         # delete the VMs (keys, the Slurm build cache and logs/ are kept)
+make stop              # stop everything, frees the RAM  (make start to resume)
+make clean             # remove what tests and checks left in the VMs (jobs, images, caches)
+make clean-all         # delete the VMs and their state
 ```
 
-Targets are grouped by prefix: `vm-*`, `net-*`, `ssh-*`, `test-*`, `report-*`. The old names
-(`make up`, `make check`, `make t0`, ...) still work.
+`make` calls `./testbed`, which you can also run directly (`./testbed help`). If a step fails, its
+log is in `logs/`, and the last lines are printed on the screen.
 
-`check`, `t0` and `clean` refuse to run while another of them is running: each one switches the
-compute node's network mode, so running two together mixes their results.
+`check` and `clean` refuse to run while the other is running: each one switches the compute node's
+network mode, so running both together mixes their results.
 
-`make` calls `./testbed`, which you can also run directly (`./testbed help`). If a step fails,
-its log is in `logs/`; the last lines are printed on the screen.
+**The trial user.** `./testbed trial setup` (part of `make init`):
+- runs `guest/trial-user.sh` on `ulisses`, which creates `jcosta` with a kubeconfig that has
+  cluster-admin through a ServiceAccount token and no sudo, as on Ulisses;
+- gives that user's SSH key to `lisa` on the login node;
+- copies this repository, without settings files, results or git, to `~jcosta/PipelineRunner`;
+- runs `make setup` there with `ENV_FILE=testbed.env`.
+
+`./testbed trial make <targets>` runs any target of `deploy/deucalion/Makefile` as that user. The
+trial has its own virtual node, namespace, ports, project folder and sidecar
+(`deploy/deucalion/testbed.env.example`), next to the testbed's own installation of Isabel's
+prototype.
 
 ## What it reproduces
 
@@ -84,33 +89,6 @@ Only these. The exact diff is printed in `logs/<time>-provision-ulisses.log`.
    step logs. Her setup can no longer be reproduced exactly as written, which is worth a sentence
    in the thesis.
 
-## Test T0
-
-Her ten tests (`tests/workflows`, TC01-TC10), submitted with `argo submit`, in three modes:
-
-| Mode | Compute node | Images | Question |
-|---|---|---|---|
-| `dev` | online | `docker://` (her setting) | Baseline: as on Deucalion's `dev-x86` |
-| `normal` | offline | `docker://` (her setting) | Does her design work on an isolated node? |
-| `normal-images` | offline | pulled beforehand on the login node (only the sidecar's `ImagePrefix` changes) | With images out of the way, do her data transfers work on an isolated node? |
-
-Before each mode the Global Storage and the HPC data folder are reset and the queue is emptied
-(Kubernetes Jobs, Slurm jobs, interLink job folders). After each test its leftover Jobs are removed:
-her Jobs keep the default `backoffLimit` of 6, so a failed Job keeps retrying after Argo has moved on
-and would otherwise run into the next test. While a test runs, the runner also records what
-Kubernetes reports for each HPC pod (`argo/<mode>/pods.tsv`) and, after it, what is in the Global
-Storage (`argo/<mode>/<test>.minio.txt`); the report joins the pods with their Slurm job output and
-lists every job that failed on the HPC side while its pod was reported `Succeeded`. The report compares each
-test with the `dev` baseline (TC02 and TC08 contain steps that are meant to fail), and classifies
-every Slurm job from its `job.out`: `OK`, `IMAGE_PULL`, `DATA_SYNC_IN`, `DATA_SYNC_OUT`,
-`SYNC_OUT_SILENT` (upload failed but `mc` exited 0), `TASK_ERROR` or `OTHER`. The findings are in
-the git history of `../APPROACH.md` (section 2 of the version before 16 Nov 2026).
-
-Expected if the analysis is right: everything as in her thesis in `dev`; in `normal`, input syncs
-fail with `DATA_SYNC_IN` and TC01 with `IMAGE_PULL`; in `normal-images`, TC01 passes but every
-sync still fails, because her wrapper runs inside the Slurm job, on the compute node
-(interLink Slurm plugin 0.6.1, `pkg/slurm/prepare.go`: `CommandPrefix` is written into `job.slurm`).
-
 ## The login node and the Kubernetes side
 
 On Deucalion the login node most likely cannot reach `ulisses` (a private FEUP address); `ulisses`
@@ -120,32 +98,15 @@ connections to `ulisses`; connections `ulisses` opens keep working. Only MinIO s
 because it stands for the Global Storage, a separate host on Deucalion (her Azure VM) that the login
 node reaches. `make test-check` verifies it (U5-U7, and U1 for MinIO).
 
-## Test T1
+## Earlier tests (T0, T1)
 
-Plain Argo workflows on the offline compute node, with the split executor
-(`../setup/hpc/split-executor`):
-
-- TC00: one container template with a native input and output artifact.
-- TC01-TC07, TC09, TC10: Isabel's tests rewritten as plain Argo workflows
-  (`../tests/argo-native`: her six compute modules as a WorkflowTemplate with
-  native artifacts). TC08 is not ported; see that folder's README.
-
-The workflows are submitted as written: no sync modules, nothing about the HPC side. The platform
-sends them to interLink (Argo `workflowDefaults`, set for the run). Argo's `init` (downloads inputs)
-and `wait` (uploads outputs, reports to Kubernetes) run on the login node; only `main` runs in the
-Slurm job. Data moves through the pod's emptyDirs, which the plugin puts in the job folder on the
-shared FS. Their Kubernetes API calls go through the relay (`split-executor/api-relay`): `wait` calls
-a local HTTPS endpoint on the login node; an agent on `ulisses` pulls the calls through its own
-`ssh -L` tunnel and answers them from the real API. Her data wrapper is switched off; the sidecar
-gets `--no-eval` and `--contain`. Everything is restored after the run.
-
-Every test is checked against Argo and against what is actually in the Global Storage
-(`tests/argo-native/checks.tsv`). The report shows, per test, the checks, the pods, and where `main`
-and `init`/`wait` ran, plus a network probe from the compute node and the login node.
-
-`make test-t1` (mode `normal-images`, about 25 minutes). `T1_TESTS="00 05" make test-t1` runs a
-subset; `T1_MODES="normal"` and `"dev"` also work; `T1_SPLIT=off` runs the same workflows through
-interLink as is (the "before").
+Until 24 Nov 2026 the testbed also ran two tests of its own. Their code is in the tag
+`split-interlink-0.6.1`, and their results are summarised in `../APPROACH.md` (git history before
+16 Nov 2026) and `../CHANGELOG.md`.
+- **T0:** Isabel's ten workflows, with her sync modules, in three modes: compute node online,
+  offline, and offline with images pulled beforehand. It showed that her design cannot move data on
+  an offline node, because her wrapper runs inside the Slurm job.
+- **T1:** the plain Argo workflows with the split executor (interLink 0.6.1). It passed all tests.
 
 ## Known differences
 
@@ -181,21 +142,21 @@ interLink as is (the "before").
 
 - The host scripts run under the macOS system **bash 3.2**: no associative arrays, and no `-u`
   (an empty `"$@"` counts as unbound).
-- After a Mac reboot or sleep: `make vm-start` (it re-syncs hosts, clocks and the network mode), not
+- After a Mac reboot or sleep: `make start` (it re-syncs hosts, clocks and the network mode), not
   `limactl start`. If switching the network mode ever hangs Lima's SSH:
-  `limactl stop -f tb-cn; make vm-start`.
+  `limactl stop -f tb-cn; make start`. interLink of the trial then needs `make test` (or
+  `make trial T=up`) again.
 - Lima's user-v2 network: cn `192.168.104.1`, login `.3`, ulisses `.4` (`state/ips.env`). Port 111
   forwarding warnings are harmless.
-- Only one of `check`, `t0`, `t1` and `clean` can run at a time (a lock enforces it); `make vm-clean`
-  resets the VMs after interrupted runs and saves any results still inside them.
-- Editing from a Claude session through the desktop bridge: copied files can lose their execute bit
-  (the makefile calls `bash ./testbed`; `chmod +x` the rest), and the file-copy tool refuses to
-  write `makefile`. Compare `md5sum` after writes.
+- Only one of `check` and `clean` can run at a time (a lock enforces it). `make clean` resets the
+  VMs after interrupted runs.
+- Root on the VMs cannot write in `lisa`'s home on the login node, because `/home` is NFS with root
+  squash: use `sudo -u lisa`.
 
 ## Layout
 
-- `Makefile`, `testbed`: the commands (macOS bash 3.2).
+- `testbed`: the commands (macOS bash 3.2), driven by `../Makefile`.
 - `guest/`: scripts copied into the VMs at `/opt/testbed/guest` and run there.
 - `state/`: generated keys, VM configs, IP addresses (not versioned).
 - `cache/`: the built Slurm packages, so rebuilding takes minutes (not versioned).
-- `logs/`: step logs, check reports, T0 results (not versioned).
+- `logs/`: step logs and check reports (not versioned).

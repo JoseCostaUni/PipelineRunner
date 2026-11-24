@@ -1,5 +1,0 @@
-# Real Slurm commands (the values SlurmConfig.yaml had before the split executor was enabled).
-REAL_SBATCH=/usr/bin/sbatch
-REAL_SQUEUE=/usr/bin/squeue
-REAL_SCANCEL=/usr/bin/scancel
-REAL_SCONTROL=/usr/bin/scontrol

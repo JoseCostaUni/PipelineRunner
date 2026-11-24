@@ -8,7 +8,139 @@ can be traced back to the problem that caused it.
 Terms: **split** = interLink 0.6.1 with the split executor (Argo's `init` and `wait` on the login
 node, only `main` in the Slurm job). **reverse** = interLink 0.6.3 with the reverse tunnel of its
 SSH shadow (the whole pod in the Slurm job). **Testbed** = `testbed/`, a small copy of Deucalion on
-three Lima VMs.
+three Lima VMs. Since 24 Nov 2026 `main` has only `reverse`; entries below that one describe both.
+
+---
+
+## 2026-11-24 (evening): `main` keeps only interLink 0.6.3 and the reverse tunnel; two tags
+
+**Decision.** We go with interLink 0.6.3 and its reverse tunnel. It is the only approach left on
+`main`; the split executor lives on in a tag.
+- **Why now:** it has run on Deucalion's `normal-x86` (TC00 to TC05, `20261124-011219-reverse`). The
+  evidence shows that every step ran on the compute nodes behind the tunnel (entries below).
+- **Why not keep both:** keeping `split` working beside it cost about half of every script.
+  - `mode`/`enable`/`disable` with backups and a mode file on each side;
+  - three wrappers and a relay;
+  - two interLink and two plugin versions;
+  - a second testbed runner and tests T0/T1.
+
+  Every change had to be made and tested twice. The thesis can compare the two from the tags and from
+  the results already recorded, without `main` carrying both.
+
+**Tags** (annotated, local until pushed with `git push origin main --tags`):
+
+| Tag | Commit | What |
+|---|---|---|
+| `split-interlink-0.6.1` | `108d868` | the last commit with both modes. The first state with `split` only is `9f3cbb2` |
+| `reverse-interlink-0.6.3` | this commit | `reverse` only |
+
+**What was removed from `main`** (all of it is in `split-interlink-0.6.1`):
+- **The split executor:** `setup/hpc/split-executor/` (the `sbatch`, `squeue` and `scancel`
+  wrappers, and the API relay with its binaries).
+- **Isabel's original setup and tests, as copied into this fork:**
+  - `setup/kubernetes/`, `setup/global_storage/`, and `setup/hpc/{1-bridge,2-data,main,cleanup}.sh`
+    with their README and `.env.example`;
+  - `tests/workflows/`;
+  - `docs/img/` (her diagrams).
+
+  The testbed never used these copies: it installs `ulisses` from her own repository (`LPR_DIR`).
+  The tests in `tests/argo-native/` are their plain-Argo versions.
+- **The testbed's own tests and runners:**
+  - T0 (her workflows, three network modes) and T1 (the split executor): `cmd_t0`, `cmd_t1` and
+    `guest/t0-*.sh`, `guest/t1-*.sh`, `guest/split-*.sh`;
+  - `testbed/makefile`, which the root `Makefile` had replaced;
+  - the experiment's runner, `experiments/reverse-tunnel/run.sh` and `guest/`. It worked by switching
+    the testbed's installation of Isabel's prototype (0.6.1) to 0.6.3 with drop-ins and backups, and
+    it called T1's scripts.
+- **From `deploy/deucalion`:**
+  - the `split` mode and the settings it needed (`SPLIT_API`, `RELAY_API_PORT`, `RELAY_CTL_PORT`,
+    `SPLIT_IL_VERSION`);
+  - the mode switching itself: `mode`, `api reverse|split|off`, `hpc enable|disable`, the
+    `SlurmConfig.yaml.pre-*` backups and the systemd drop-in that ran plugin 0.6.3;
+  - `relay-health` and `relay-log`.
+
+In all, 78 files changed: 6396 lines deleted and 1077 added, most of the added lines in the docs.
+- `k8s-side.sh`: 1011 to 930 lines, with the new `up`/`down` and evidence code.
+- `hpc-side.sh`: 490 to 315.
+- `testbed/testbed`: 893 to 590.
+
+**What changed in how it runs:**
+- **`make up` / `make down`** replace `make reverse` / `make split`.
+  - `up` runs offload off, `hpc install`, `hpc images`, `install` (if missing), `tunnel on`,
+    `artifacts` and offload on. Every step can be repeated.
+  - `down` runs offload off, then `tunnel off`, which is the old `api off`.
+  - `restore` is unchanged in effect.
+- **`hpc-side.sh install` writes the plugin's whole configuration from the settings every time**, and
+  the user unit runs plugin `IL_VERSION` directly.
+  - It restarts the sidecar only if the configuration, the unit or the binary changed (compared with
+    `cmp`).
+  - It removes the old drop-in folder, so a login node set up before today comes over cleanly.
+  - *Why:* with one mode there is nothing to switch, so no backup to restore. Writing the whole file
+    from the settings also means a change in `deucalion.env` always reaches the sidecar.
+  - *Cost:* a `SlurmConfig.yaml` edited by hand on the login node is overwritten.
+- **State.** Each side is now just `on` or `off`. Ulisses is `on` while `~/lisa-trial/state/mode`
+  exists (it holds `up <version>`); the login node is `on` while the sidecar runs with its
+  configuration. `make test` refuses to run unless both are on and offload asks for the tunnel.
+- **Settings:**
+  - `IL_VERSION=0.6.3`. An old `deucalion.env` still works: `REVERSE_IL_VERSION` is read when
+    `IL_VERSION` is missing, and the split settings are ignored.
+  - New `EXTRA_FORWARDS`, for services besides the Global Storage and the API that every pod may
+    reach through the tunnel, e.g. a message bus.
+  - The variable naming the settings file is `TRIAL_ENV`, with `SPLIT_ENV` still read.
+- **Names:**
+  - test workflows carry `lisa-test=true` (was `split-trial=true`; `clean` deletes both);
+  - the Global Storage keys' Secret is `lisa-gs-creds` (`artifacts` deletes the old `split-gs-creds`);
+  - result folders are `results/<time>/`, without the mode suffix.
+- **Testbed: the same scripts as Deucalion.**
+  - `make init` and `make test` at the repository root now run `deploy/deucalion` on the testbed,
+    as a user without root, through the new `testbed trial` command. Its `setup` creates the user
+    with `guest/trial-user.sh`, copies the repository without settings files, results or git, and
+    runs `make setup`; `trial make <target>` runs any target.
+  - `make trial T=<target>` exposes it.
+  - *Why:* before, the testbed ran 0.6.3 through the experiment's own runner, a second
+    implementation of the same configuration that had already drifted from `deploy/deucalion`. Now a
+    rehearsal on the testbed is a run of exactly what goes to Deucalion.
+  - *Cost:* the testbed no longer tests Isabel's prototype itself. Her installation stays only as the
+    base cluster, as on Ulisses.
+
+**Fixed along the way.** `k8s-side.sh sync` reported "copy of the settings failed" whenever the
+Global Storage was outside the cluster, although the settings had been written.
+- **Cause:** the group that writes them ended with `[ "$GS_IN_CLUSTER" = true ] && printf ...`, which
+  returns 1 when the test is false, and `pipefail` made that the pipeline's status.
+- **Since when:** 23 Nov (`4903ab5`, the in-cluster MinIO), so the tag has it too. Every run since
+  then used `GS_ENDPOINT=cluster`, which hid it. It would have stopped `make setup` on Deucalion with
+  Isabel's MinIO.
+- **Found by:** the testbed's `make init`, whose `testbed.env` points at the testbed's MinIO outside
+  the cluster. Now an `if`.
+
+**What it costs:**
+- **No fallback on `main`.** If a site forbids `srun --overlap`, or has no `python3` or `sshd` on its
+  compute nodes, the reverse tunnel cannot run there. The split executor needed only SSH to the login
+  node; it is in the tag and would have to be brought back.
+- **No faster option on `main`.** `split` took about 30 s for a short step on the testbed, against
+  about 1.5 min with the tunnel.
+- **T0 cannot be rerun from `main`.** T0 showed why Isabel's design cannot move data on an offline
+  node; it can still be rerun from the tag.
+
+**Evidence** (testbed):
+- **Run `20261124-172438`,** as the trial user, with `GS_ENDPOINT=cluster`: `make sync`, `setup`,
+  `check`, `up`, `test T="00 11"`, `evidence`, `restore` and `minio-off`, all with the new scripts.
+  - TC00 passed in 1m47s and TC11 in 2m08s, 2/2 checks each, on node `cn`, partition `arm`.
+  - `logs.txt`: "reverse tunnel ready after 80s" (84 s for TC11) in `init`, `main` and `wait`.
+  - `make evidence`: `vcs.revision=6b0203b0e92b…` for both interLink binaries, and the plugin's sha256
+    equal to the one published with release 0.6.3 (`interlink-sidecar-slurm_Linux_arm64`).
+  - After `restore`, only Isabel's `interlink-node` was left. The five job folders of the trial were
+    empty (plugin 0.6.3's DeletePod panic: entry "a Global Storage inside the cluster", 24 Nov).
+- **Root entry point, run `20261124-173403`:** `make init`, `make test TESTS=00` and
+  `make trial T=restore`, from the repository root.
+  - The settings were the VM's old `testbed.env` from 23 Nov: the testbed's MinIO outside the
+    cluster, and the split settings still in the file.
+  - `make init` first stopped at `sync` (the bug above); with the fix, setup and `up` went through.
+  - TC00 passed in 1m36s, 2/2 checks, on `cn`.
+  - `restore` ended with Ulisses `off`, the sidecar inactive, the virtual node and the SSH key's
+    copies deleted, and the saved artifact repository put back.
+  - So the new root targets work, old settings files still work, and the `sync` fix holds for a
+    Global Storage outside the cluster.
 
 ---
 

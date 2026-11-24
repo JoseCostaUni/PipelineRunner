@@ -2,135 +2,204 @@
 
 ## 1. The problem
 
-On Deucalion, the login nodes reach the internet, but the compute nodes of the `normal-*` partitions do not. Anything that moves data between the Global Storage and the HPC side, or reports results to Kubernetes, therefore has to run where there is network, while the computation itself runs on a compute node. Scientists should still be able to write ordinary Argo workflows, with native artifacts, that would run on any Kubernetes cluster.
+On Deucalion the login nodes reach the internet, but the compute nodes of the production partitions
+(`normal-x86`, `normal-arm`, `large-arm`, GPU) cannot open any connection outside Deucalion. Deucalion's
+staff confirmed this on 19 Nov 2026, and a probe job on `normal-x86` showed it.
+- **What an Argo pod needs:** its containers must reach the Global Storage (S3) for their artifacts
+  and the Kubernetes API to report back. `init` downloads the inputs, `main` runs the scientist's
+  code, and `wait` uploads the outputs and reports.
+- **What scientists should write:** ordinary Argo workflows with native artifacts, that would run on
+  any Kubernetes cluster, without anything specific to the HPC side.
 
-Two ways of doing this are implemented, called modes. `split` runs on interLink 0.6.1 and is described in sections 2 to 6. `reverse` runs on interLink 0.6.3 and is described in section 7. Both run the same workflows and tests, and `deploy/deucalion/k8s-side.sh mode split|reverse` switches between them ([HOW_TO_RUN.md](HOW_TO_RUN.md)).
+## 2. The idea: interLink 0.6.3's reverse tunnel
 
-## 2. The idea
+interLink offloads a Kubernetes pod to Slurm. A virtual kubelet on the Kubernetes side passes the
+pod to a plugin on the login node (the "sidecar"), which runs it as a Slurm job with Apptainer.
+interLink 0.6.3, released on 16 Nov 2026, adds a reverse tunnel to its SSH shadow (interLink PR #577).
+- **What the tunnel gives:** a pod running on a compute node can open connections back into the
+  cluster, to the Kubernetes API, the Global Storage, or any service it names, through the login node.
+- **What the site must allow:** SSH to the login node, which interLink needs anyway, `srun --overlap`
+  into one's own jobs, and `python3` and `sshd` on the compute nodes.
+- **The result:** the standard Argo executor runs whole on the compute node, as on any Kubernetes node.
+  Argo and interLink are not modified.
 
-An Argo pod has three containers. `init` downloads the input artifacts, `main` runs the user's command, and `wait` uploads the output artifacts and reports to Kubernetes. Only `init` and `wait` need the network, and they talk to `main` only through files under `/var/run/argo` and the pod's emptyDirs. `wait` learns that `main` has ended by polling a file, not through file notifications, so this also works across two machines. The split executor therefore runs `init` and `wait` on the login node and only `main` on the compute node, with the shared file system (`/projects`) between them. Nothing in Argo or interLink is modified.
+### 2.1 How one pod runs
 
-### 2.1 Compared with Isabel Moutinho's prototype
+1. **The whole pod is one Slurm job.** The plugin submits the pod as one job, with `init`, `main` and
+   `wait` in it.
+2. **A relay holds the pod's names.** Before the containers start, the job starts a small relay
+   (`python3`). It holds a loopback address for the pod and accepts only the job's user. The names the
+   pod asked for, such as the Global Storage's Service name and `kubernetes.default.svc.cluster.local`,
+   are mapped to that address in the containers' `/etc/hosts`.
+3. **The shadow pod reaches the job.** On Ulisses, interLink starts a shadow pod for the offloaded
+   pod. The shadow logs in to the login node over SSH and finds the job with `squeue --me`. It runs
+   `srun --overlap` into the job's allocation to start an `sshd` there, in user space, as the job's
+   user, over `srun`'s standard input and output. Slurm carries those streams between `srun` on the
+   login node and `slurmstepd` on the compute node.
+4. **The return paths are opened.** Through that `sshd`, the shadow binds each forward with `ssh -R`
+   as a Unix socket in the pod's folder under `SocketDirRoot`, behind the relay. It connects each one
+   to the real endpoint inside the cluster.
 
-Both designs share the same base: Kubernetes, Argo and interLink on Ulisses, the interLink Slurm sidecar on a Deucalion login node reached through an `ssh -L` tunnel, and MinIO as the Global Storage. They differ in how data reaches the job and in what the scientist writes.
+So nothing on the compute node connects outwards, nothing is installed on the site, and the login
+node's `sshd` is never asked to forward.
+- **The shared file system is not a data channel.** The sockets live there only because the plugin
+  creates the folder from the login node, and Unix sockets are local to one node.
+- **What does go through it is the plugin's bookkeeping,** as in any interLink deployment: the job
+  script, the containers' settings, each container's output and exit code, and the pod's emptyDirs.
 
-| | Isabel's prototype | Split executor |
-|---|---|---|
-| Workflows | Written with her sync modules and resource templates | Plain Argo workflows with native artifacts, unchanged |
-| Data movement | A data wrapper (`sync-data.sh`), set as the sidecar's `CommandPrefix`, mirrors the data with `mc` around the job | Argo's own `init` and `wait` containers download and upload the artifacts on the login node |
-| What runs in the Slurm job | The wrapper and the user's container | Only `main`, the user's container |
-| Sidecar configuration | Real Slurm commands, `CommandPrefix` set to the wrapper | Three wrappers in place of `sbatch`, `squeue` and `scancel`, no `CommandPrefix` |
-| Reporting to Kubernetes | The virtual kubelet reports the status of the pods of her Kubernetes Jobs | Through `wait`, with its API calls pulled by Ulisses over the relay |
-| Container images | Pulled by the job (`docker://`) | Pulled beforehand on the login node |
+The job's log shows `interLink: reverse tunnel ready after <n>s` in every container before it starts.
 
-## 3. How one pod runs
-
-The interLink sidecar on the login node still receives the pod and still calls `sbatch`, `squeue` and `scancel`, but its configuration points those three commands to our wrappers. The `sbatch` wrapper keeps only `main` in the Slurm job and submits it on hold. It then starts `login.sh`, which runs `init` on the login node, releases the job once the inputs are staged, and runs `wait` while `main` runs on the compute node. `wait` sees `main`'s exit code file on the shared file system, uploads the outputs and reports them to Argo. The `squeue` wrapper keeps the pod running until `wait` is done and then reports the true result.
-
-![Sequence of one pod through the split executor](docs/img/sequence.svg)
-
-`wait` needs the Kubernetes API, but the Deucalion login node most likely cannot connect to Ulisses, which has a private FEUP address. The relay (`setup/hpc/split-executor/api-relay/`, one static Go binary) solves this without any change to the site network. `split-relay login` on the login node accepts the API calls of `init` and `wait`, and `split-relay agent` on Ulisses pulls those calls through an `ssh -L` tunnel that Ulisses opens, like interLink's own tunnel. The agent answers each call from the real API with the pod's own token. This works because Argo's executor makes only plain request and response calls, and no watches. If the API is reachable from the login node, the relay is not needed.
-
-## 4. The three scripts
-
-The three scripts live in `setup/hpc/split-executor/`. They replace the Slurm commands that the sidecar calls, which is the only place where the split can happen without forking Argo or interLink. The sidecar already lets you choose the path of each command (`SbatchPath`, `SqueuePath`, `ScancelPath` in `SlurmConfig.yaml`), so three lines of configuration put them in place. The real Slurm commands are recorded in `split.conf`.
-
-![What each wrapper does](docs/img/wrappers.svg)
-
-### 4.1 `sbatch`
-
-The sidecar turns every pod into one Slurm job that runs all of its containers on the compute node, where `init` and `wait` could not reach the Global Storage or the Kubernetes API. The wrapper is called once per pod with the path of `job.slurm`. If the generated `job.sh` contains exactly one `init`, one `wait` and one `main` line, it keeps a copy as `job.sh.orig` and removes the `init` and `wait` lines, so the Slurm job runs only `main`. It rewrites the bind mounts of the input artifacts, because the plugin ignores Kubernetes' `subPath`. It makes the compute node copy `argoexec` before `main` starts, replaces `job.sh` atomically and runs it with `/bin/bash`, because executing a file that another node has just written can fail with "Text file busy". It then submits the job with `sbatch --hold`, prints Slurm's answer for the sidecar, and starts `login.sh` in its own systemd user unit (or with `setsid`). `login.sh` runs `init`, then `scontrol release`, then `wait`, together with a watchdog that writes an exit code for `main` if the job ends without one, so `wait` never hangs.
-
-The hold is what makes the order safe: the compute node is not used until the inputs are on the shared file system, and if `init` fails the held job is cancelled and never runs. Any other job goes to the real `sbatch` unchanged. The wrapper writes nothing to stderr unless the submission failed, because the sidecar treats any stderr output as a failure, so it logs to `split.log` in the job folder.
-
-### 4.2 `squeue`
-
-The sidecar decides whether a pod has finished by polling `squeue`. For a split pod, the Slurm job ends before the pod is really done, because `wait` still has to upload the outputs. Slurm 23.11 also prints exit codes as `1:0`, and the plugin 0.6.1 reads the `0` after the colon. The wrapper prints the exit code alone for every job (`1` instead of `1:0`). For a split pod, it reports `PD` while `init` stages the inputs and `R` until `login.sh` has finished, and then the highest exit code of `init`, `main`, `wait` and `login.sh`, so the pod is `Succeeded` only if all of them exited with 0. Without it, Kubernetes would mark the pod as finished before its outputs exist, and a failed step could be reported as a success.
-
-### 4.3 `scancel`
-
-When a pod is deleted or a workflow is stopped, the sidecar calls `scancel`, but part of a split pod runs outside Slurm, in `login.sh`. The wrapper stops the systemd unit of `login.sh`, removes the job from its registry and then calls the real `scancel`. Without it, `init` or `wait` would keep running on the login node after the pod is gone.
-
-### 4.4 Other settings
-
-Four more changes to `SlurmConfig.yaml` are needed. `CommandPrefix` is set to empty, which switches off the data wrapper. `--no-eval` is added to the Singularity options, because Apptainer otherwise evaluates every environment value a second time and corrupts Argo's `ARGO_TEMPLATE`; it needs Apptainer 1.1 or newer. `--contain` gives each container its own `/tmp`, as in Kubernetes. `ImagePrefix` points to images pulled beforehand on the login node, because the compute node cannot pull images. On Ulisses, the virtual kubelet gives offloaded containers the relay's address and certificate (`KubernetesApiAddr`, `KubernetesApiPort`, `KubernetesApiCaCrt`). Argo's `workflowDefaults` send the pods to the interLink node, so the workflows themselves say nothing about the HPC side. `deploy/deucalion/hpc-side.sh` and `k8s-side.sh` make all of these changes with a backup, and undo them.
-
-The HPC side needs only bash, coreutils, grep, sed, awk, curl, openssl, Slurm, Apptainer and `systemd-run --user` (or `setsid`). It needs no Python, no jq, no administrator and no site network change.
-
-## 5. Results
-
-All results come from the testbed (`testbed/`), a small copy of Deucalion on Lima virtual machines with Slurm 23.11.4, Apptainer, a shared NFS file system, an offline compute node, and a login node that cannot connect to the Kubernetes side. The tests are TC00 (one step with an input and an output artifact) and Isabel's tests TC01 to TC10 rewritten as plain Argo workflows (`tests/argo-native/`), except TC08, which tests per-user isolation and is left for later. Every result is checked in Argo and in the Global Storage (`tests/argo-native/checks.tsv`).
-
-| Run | Date | Result |
-|---|---|---|
-| `t1-20261018-005325` | 18 Oct 2026 | All tests pass, 30 of 30 checks (`make test-t1`) |
-| `20261116-220707` | 16 Nov 2026 | All tests pass, 30 of 30 checks, through the Deucalion scripts (`deploy/deucalion`) with the testbed's settings, after the HPC side stopped needing Python and jq |
-| `20261117-222712-split` | 17 Nov 2026 | All tests pass, 30 of 30 checks, through the same scripts after they gained the `reverse` mode, switched from `reverse` with `k8s-side.sh mode split` |
-
-In all these runs, `main` ran on the compute node for every pod and `init` and `wait` ran on the login node, with all API calls going through the relay. Each test took between 30 seconds and about 3 minutes, including simulations of 120 and 60 seconds in TC06 and TC10. The next step is the same procedure on Deucalion's `normal-x86` partition.
-
-## 6. Known limits
-
-Images must be listed and pulled by hand on the login node, so a workflow cannot yet name any image it likes. Only x86 partitions work, because `init` copies the login node's `argoexec` into the pod and Deucalion's login nodes are x86. All pipeline jobs share one Deucalion account, and each job folder keeps the artifact keys and the pod's service-account token until it is deleted. Every byte of data goes through the login node, and an intermediate artifact makes a round trip through the Global Storage even when the next step runs on the same file system. `init` and `wait` live on the login node for the whole job, so a reboot of that node loses running pods, and many parallel steps mean many processes there. The relay's ports listen on `127.0.0.1` of a shared login node, where other users could reach them. The wrappers depend on the exact job script of interLink 0.6.1, on `squeue`'s output format and on Slurm's `--hold`, so an upgrade could break them; reporting the `subPath` and `1:0` issues upstream and making the split a plugin feature would remove most of this coupling.
-
-## 7. The reverse mode: interLink 0.6.3 without the split
-
-CNES does not want to maintain wrapper scripts. interLink 0.6.3, released on 16 Nov 2026, adds a reverse tunnel to its SSH shadow (PR #577): a pod running on a compute node opens connections back into the cluster, to the Kubernetes API and the Global Storage, through the login node, using `srun --overlap` and an sshd started inside the job where the site allows nothing else. With it the standard Argo executor runs whole on the compute node, so the split is no longer needed. The Slurm plugin 0.6.3 also fixes the `1:0` false successes (#169), so the `squeue` wrapper is not needed either, and `scancel` has nothing left to stop.
-
-### 7.1 How one pod runs
-
-The plugin submits the whole pod as one Slurm job, with `init`, `main` and `wait` in it, as on any Kubernetes node. Before the containers start, the job starts a small relay (`python3`) that holds a loopback address for the pod and accepts only the job's user, and maps the names the pod asked for to that address in the containers' `/etc/hosts`. On Ulisses, interLink starts a shadow pod for the offloaded pod. The shadow logs in to the login node over SSH, finds the job with `squeue --me`, and runs `srun --overlap` into the job's allocation to start an sshd there as the job's user, over `srun`'s standard input and output. Through that sshd it binds each forward with `ssh -R` as a Unix socket in the pod's folder under `SocketDirRoot`, behind the relay, and connects each one to the real endpoint inside the cluster. Nothing on the compute node connects outwards, nothing is installed on the site, and the login node's sshd is never asked to forward.
-
-### 7.2 What is configuration, and what is still ours
+### 2.2 What is configuration, and what is still ours
 
 Almost everything is configuration:
 
-- **Virtual kubelet:** `Network.SSH` with `Reverse` (`NodeExec: srun`, `Sshd: userspace`, the combination that needs neither SSH into compute nodes nor forwarding on the site's sshd), the SSH key as a Secret and the login node's host keys as a ConfigMap. The API address given to offloaded containers is `kubernetes.default.svc.cluster.local:6443`, because an unprivileged sshd cannot bind port 443.
-- **Argo `workflowDefaults`:** the pod annotation `interlink.eu/reverse-forwards`, so the workflows stay plain Argo.
-- **Slurm plugin:** `SocketDirRoot`, `CommandPrefix: ""` (Isabel's data wrapper off), `--no-eval --contain`, pre-pulled images (`ImagePrefix`), and a fixed node capacity (`ResourceScriptPath`), because the plugin otherwise reports the free memory it sees, which fell below one pod's request on the testbed.
-- **Kubernetes:** the Global Storage under a Service name, because the tunnel maps names, not IP addresses.
+- **Virtual kubelet:**
+  - `Network.SSH` with `Reverse` (`NodeExec: srun`, `Sshd: userspace`), the combination that needs
+    neither SSH into compute nodes nor forwarding on the site's `sshd`;
+  - the SSH key as a Secret and the login node's host keys as a ConfigMap;
+  - for offloaded containers, the API address `kubernetes.default.svc.cluster.local:6443`, because an
+    unprivileged process cannot bind port 443.
+- **Argo `workflowDefaults`:**
+  - the pods' node selector and toleration for the virtual node;
+  - the Slurm account and partition;
+  - the annotation `interlink.eu/reverse-forwards`, which names what the tunnel carries.
 
-One wrapper is still ours, `setup/hpc/subpath-fix/sbatch`. The plugin still ignores `subPath` on emptyDir volumes, which Argo uses for every input artifact. `experiments/reverse-tunnel/upstream/` has the plugin patch to propose, and once it is released no wrapper is left. `deploy/deucalion` makes all of these changes with a backup and undoes them (`k8s-side.sh mode reverse`, `restore`).
+  The workflows themselves stay plain Argo.
+- **Slurm plugin:**
+  - `SocketDirRoot`;
+  - `CommandPrefix: ""`;
+  - `--no-eval`: Apptainer would otherwise evaluate every environment value a second time and corrupt
+    Argo's `ARGO_TEMPLATE`;
+  - `--contain`: each container gets its own `/tmp`, as in Kubernetes;
+  - `ImagePrefix`: images pulled beforehand, because compute nodes cannot pull;
+  - a fixed node capacity (`ResourceScriptPath`). Plugin 0.6.3 otherwise reports the free memory it
+    sees, which fell below one pod's request on the testbed and left pods `Pending`.
+- **Kubernetes:** the Global Storage under a Service name, because the tunnel maps names, not IP
+  addresses.
 
-### 7.3 Results
+One wrapper is still ours, `setup/hpc/subpath-fix/sbatch`, set as the plugin's `sbatch`:
+- **The gap:** the plugin ignores `subPath` on emptyDir volumes, and Argo mounts every input artifact
+  that way (the emptyDir `input-artifacts`, `subPath: <artifact name>`). Without the fix, `main` finds a
+  folder where it expects a file.
+- **What the wrapper does:** it rewrites those binds in the job script, then calls the real `sbatch`.
+- **No configuration can avoid it.** Argo's controller hard-codes this mount, and without `subPath`
+  the container would see the same wrong folder.
+- **The fix belongs in the plugin.** `experiments/reverse-tunnel/upstream/` has a 9-line patch with a
+  unit test. The plugin's `main` still had the gap on 24 Nov 2026, and nobody had reported it. Once a
+  fix is released, no wrapper is left.
 
-The mode was first tried on the testbed with `experiments/reverse-tunnel/` (its README lists the three problems found and fixed), and then run with the Deucalion scripts on the testbed's settings, exactly as in [HOW_TO_RUN.md](HOW_TO_RUN.md) section 1.4. The same tests and checks are used as for `split` (section 5).
+## 3. How it runs on Ulisses and Deucalion
 
-| Run | Date | Result |
+Everything runs as one's own accounts (`deploy/deucalion`, steps in
+[RUN_ON_ULISSES.md](RUN_ON_ULISSES.md)):
+- **Ulisses:** a user with a cluster-admin kubeconfig and no sudo.
+- **Deucalion:** an account that submits Slurm jobs.
+
+What runs where:
+
+- **Ulisses: interLink** (API and virtual kubelet) and the SSH tunnel to the sidecar.
+  - They run as the user's own processes in `~/lisa-trial`, each restarted if it exits. They are not
+    systemd services, which without root would stop at logout.
+  - Each person has their own virtual node, namespace and ports.
+  - Argo is installed once.
+  - After the virtual kubelet starts, its serving certificate request is approved, which nothing on a
+    kubeadm cluster does by itself. Without it, the API server cannot read any container's log from
+    the virtual node.
+- **Deucalion: the Slurm plugin 0.6.3** runs as the user service `lisa-sidecar`, with a configuration
+  written from the settings.
+  - Images are unpacked in the login node's local `/tmp` and packed with our own
+    `mksquashfs -processors 4`. Singularity's `pull` cannot build images there: its `mksquashfs`
+    starts one thread per CPU (256), and a user may run 150.
+- **The Global Storage** is either an S3 endpoint that Ulisses reaches, or a MinIO inside the cluster
+  (`GS_ENDPOINT=cluster`). The jobs reach it through the tunnel either way.
+
+**Evidence of each run:**
+- `results/<run>/where.tsv` lists every step pod's Slurm job, partition and compute node.
+- `logs.txt` holds every container's own output.
+- TC11 records, from inside a step's container, that no connection to the internet opens.
+- `make evidence` adds the versions (binaries' build commits, release checksums), the configuration
+  and the logs, with secrets blanked and checked.
+
+## 4. Results
+
+The tests are TC00 (one step with an input and an output artifact), Isabel's tests TC01 to TC10
+rewritten as plain Argo workflows (`tests/argo-native/`; TC08 not ported), and TC11 (no internet from
+inside a step). Every result is checked in Argo and in the Global Storage
+(`tests/argo-native/checks.tsv`).
+
+| Run | Where | Result |
 |---|---|---|
-| `20261117-011154`, `-022804`, `-024031` | 17 Nov 2026 | All tests pass across the three runs of the experiment, after its fixes |
-| `20261117-215316-reverse` | 17 Nov 2026 | All tests pass in one run, 30 of 30 checks, through the Deucalion scripts (`k8s-side.sh mode reverse`) |
-| `20261117-224236-reverse` | 17 Nov 2026 | TC00 and TC04 pass after switching back from `split` with `k8s-side.sh mode reverse` |
+| `20261117-011154`, `-022804`, `-024031` | testbed, `experiments/reverse-tunnel` | All tests pass across the three runs of the first experiment, after its fixes (its README) |
+| `20261117-215316-reverse` | testbed, Deucalion scripts | All tests pass in one run, 30 of 30 checks |
+| `20261124-011219-reverse` | **Deucalion**, `normal-x86` | TC00 to TC05 pass (stopped by hand during TC06). Every step was a Slurm job on `cnx036`, `cnx043`, `cnx427` or `cnx497`, and TC05's three parallel writes ran at the same time on three nodes. Evidence in `CHANGELOG.md` |
+| `20261124-162554-reverse` | testbed, as a user without root | TC00 and TC11 pass. Every container logs `reverse tunnel ready after 68s` (72 s for TC11), and TC11 records `internet: blocked` |
+| `20261124-172438` | testbed, as a user without root, after `main` kept only 0.6.3 | TC00 and TC11 pass. The whole flow (`setup`, `check`, `up`, `test`, `evidence`, `restore`) ran with the new scripts |
 
-In this mode `init`, `main` and `wait` all run in the Slurm job on the offline compute node, so every artifact and every API call of these runs went through the tunnel; the job's log shows `interLink: reverse tunnel ready` before the containers start. Time per test, both runs through the Deucalion scripts on the testbed on the same evening:
+**Time.** Each pod waits for its tunnel before its containers start: the shadow pod starts, logs in,
+waits for the job to run and starts the `sshd` in it. That took 68 to 80 s per pod on the testbed.
+- **Testbed:** short tests take about 1.5 minutes, against about 30 s with the earlier split executor
+  (section 6).
+- **Deucalion:** short tests took 2 to 3 minutes, including the queue of `normal-x86`.
 
-| Test | `split` (`20261117-222712-split`) | `reverse` (`20261117-215316-reverse`) |
-|---|---|---|
-| TC00 | 0m31s | 1m39s |
-| TC01 | 0m33s | 1m26s |
-| TC02 | 0m41s | 1m34s |
-| TC03 | 0m20s | 1m30s |
-| TC04 | 0m30s | 1m38s |
-| TC05 | 1m35s | 4m26s |
-| TC06 | 2m18s | 3m30s |
-| TC07 | 1m37s | 5m28s |
-| TC09 | 1m00s | 3m38s |
-| TC10 | 2m54s | 7m37s |
+## 5. Known limits
 
-`reverse` is slower because every pod waits for its tunnel before its containers start: the shadow pod starts, logs in, waits for the job to run and starts the sshd in it. That took about 80 seconds per pod on the testbed, so it adds about a minute to every step. On Deucalion the queue of `normal-x86` comes on top, in both modes.
+- **Every pod pays for its tunnel before it starts** (about a minute).
+- **Throughput not measured.** All data passes through Slurm's I/O forwarding and SSH, and that path
+  hasn't been measured with large artifacts.
+- **The SSH key sits in Kubernetes.** The shadow logs in with an SSH private key kept in a Secret,
+  which interLink copies into every shadow namespace. interLink's documentation advises a key for the
+  tunnel only, restricted on the site. `restore` deletes the Secret and its copies.
+- **Site requirements:** `srun --overlap`, `python3` (3.6 or newer; Deucalion has 3.6.8) and `sshd`
+  on the compute nodes.
+- **The 150-process limit.** Each running pod keeps an SSH session and an `srun` on the login node,
+  where a user may run 150 processes and threads in all, the sidecar included.
+- **HTTPS would need a matching certificate.** The Global Storage is reached through a Service name,
+  so over HTTPS its certificate would have to be valid for that name (MinIO in plain HTTP here).
+- **Images are fixed in advance.** They must be listed and pulled beforehand on the login node, so a
+  workflow cannot name any image it likes.
+- **One account per deployment.** All jobs share one Deucalion account, and job folders hold the pods'
+  artifact keys and service-account tokens while they run.
+- **Argo's `workflowDefaults` are global.** While offload is on, every workflow of that Argo goes to
+  Deucalion.
+- **The Slurm plugin's 0.6.3 release binary** panics on every pod deletion (a nil pointer that the
+  tag's source already guards). The pod is deleted, but an empty job folder stays.
 
-### 7.4 Compared with `split`
+## 6. How it worked before: the split executor (interLink 0.6.1)
 
-| | `split` | `reverse` |
+Until 24 Nov 2026 this repository also had a second mode, `split`, on interLink 0.6.1. Its code is in
+the tag `split-interlink-0.6.1`.
+
+**The idea.** In an Argo pod only `init` and `wait` need the network, and they talk to `main` only
+through files. So the split executor ran `init` and `wait` on the login node and only `main` in the
+Slurm job, coordinating through the shared file system.
+- **Three wrappers** replaced the plugin's `sbatch`, `squeue` and `scancel`. The `sbatch` wrapper kept
+  only `main` in a held job and ran `init` and `wait` on the login node. The `squeue` wrapper reported
+  the pod's real result.
+- **A relay** let `init` and `wait` reach the Kubernetes API, since the login node cannot connect to
+  Ulisses. Ulisses pulled their API calls through an `ssh -L` tunnel it opened itself.
+
+It passed all tests on the testbed, 30 of 30 checks (`t1-20261018-005325`, `20261117-222712-split`).
+
+**Why it was dropped:**
+- **More code to maintain:** three wrappers and a relay, against one wrapper that is meant to go
+  upstream. CNES does not want to maintain wrapper scripts.
+- **Fragile:** the wrappers depended on the exact job script of interLink 0.6.1, on `squeue`'s output
+  format and on Slurm's `--hold`. Plugin 0.6.3 also fixes the false successes the `squeue` wrapper
+  worked around (#169).
+- **`main` had no network,** so it could not use a message bus during execution. The reverse tunnel
+  can carry any service the pod names.
+- **Shared file system and login node:** `init` and `wait` coordinated with `main` through files,
+  which Isabel found confusing, and lived on the login node for the whole job. On Deucalion that
+  counts against the 150-process limit.
+- **Its strengths:** it was faster (about 30 s for a short step), and it needed nothing from the site
+  but SSH to the login node.
+
+| | split executor (before) | reverse tunnel (now) |
 |---|---|---|
 | interLink | 0.6.1 | 0.6.3 |
 | Code we maintain | 3 wrappers + relay | 1 wrapper (subPath), until upstream |
 | Where `init` and `wait` run | login node | compute node, in the job |
-| What the site must allow | SSH to the login node | SSH to the login node, `srun --overlap` into one's own jobs, `python3` and `sshd` on the compute nodes |
-| Data path | login node ↔ Global Storage | compute node ↔ Slurm ↔ login node ↔ shadow pod on Ulisses ↔ Global Storage |
-| Time per pod (testbed) | about 30 s for a short step | about 1.5 min for a short step, mostly the tunnel |
-
-### 7.5 Known limits
-
-Every pod pays for its tunnel before it starts. The throughput of the `srun` carrier (Slurm's I/O forwarding) has not been measured with large artifacts yet. The shadow logs in with an SSH private key kept in a Secret, which interLink copies into every shadow namespace; interLink's documentation advises a key for the tunnel only, restricted on the site, and the trial scripts delete the Secret and its copies when the mode is switched off. The site must allow `srun --overlap` and have `python3` and `sshd` on the compute nodes. The Global Storage is reached through a Service name, so over HTTPS its certificate would have to be valid for that name (Isabel's MinIO uses plain HTTP). As in `split`, images must be pulled beforehand on the login node, and all jobs share one Deucalion account.
-
+| What the site must allow | SSH to the login node | SSH to the login node, `srun --overlap`, `python3` and `sshd` on the compute nodes |
+| Data path | login node ↔ Global Storage | compute node ↔ Slurm ↔ login node ↔ shadow pod ↔ Global Storage |
+| Time per short step (testbed) | about 30 s | about 1.5 min, mostly the tunnel |
+| `main` reaches services | no | yes, any service named in the forwards |

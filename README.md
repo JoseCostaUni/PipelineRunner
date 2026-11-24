@@ -1,70 +1,67 @@
 # LISA Pipeline Runner
 
-A setup and testing framework for the LISA pipeline infrastructure, supporting Kubernetes, HPC, and cloud storage configurations.
+Plain Argo workflows, with native artifacts, on HPC compute nodes that have no network. This is a fork
+of Isabel Moutinho's FEUP prototype.
+- **How:** it uses interLink 0.6.3, whose SSH shadow gives each offloaded pod a reverse tunnel. The
+  whole pod (`init`, `main` and `wait`) runs in one Slurm job on the compute node. It reaches the
+  Global Storage and the Kubernetes API back through the login node.
+- **What it changes:** neither Argo nor interLink is modified. One wrapper is left, for a gap in the
+  Slurm plugin (`subPath` on emptyDirs), and a patch for it is ready to propose upstream.
 
-## Overview
+It has run on Deucalion's `normal-x86` partition from Ulisses (24 Nov 2026).
+- **[RUN_ON_ULISSES.md](RUN_ON_ULISSES.md):** the commands, in order.
+- **[HOW_TO_RUN.md](HOW_TO_RUN.md):** what they do, and how to run the same on the local testbed.
+- **[APPROACH.md](APPROACH.md):** how it works, the results, and the limits.
+- **[CHANGELOG.md](CHANGELOG.md):** why each thing is the way it is.
+- **[NEXT_STEPS.md](NEXT_STEPS.md):** where the work stands and what is left to do.
 
-This repository provides automated setup scripts and test utilities for deploying and validating the LISA pipeline across different infrastructure environments. It is a fork of Isabel Moutinho's FEUP prototype that runs plain Argo workflows, with native artifacts, on HPC compute nodes that have no network, in two ways (modes). Neither Argo nor interLink is modified in either.
+## Layout
 
-- **`split`** (interLink 0.6.1): Argo's `init` and `wait` containers run on the HPC login node, and only `main` runs in the Slurm job. Three wrapper scripts replace the Slurm commands that the interLink sidecar calls.
-- **`reverse`** (interLink 0.6.3): the whole pod runs in the Slurm job, and reaches the Global Storage and the Kubernetes API through the reverse tunnel of interLink's SSH shadow. One wrapper is left, for a gap in the Slurm plugin (`subPath` on emptyDirs).
+- **`deploy/deucalion/`**: the scripts that set everything up and run the tests, as your own
+  accounts (no root).
+  - `k8s-side.sh` runs on Ulisses.
+  - `hpc-side.sh` runs on the Deucalion login node.
+  - A `Makefile` wraps both.
+- **`setup/hpc/subpath-fix/`**: the one wrapper left, the plugin's `sbatch`.
+- **`tests/argo-native/`**: Isabel's tests as plain Argo workflows, with TC00 (one step with artifacts)
+  and TC11 (no internet from inside a step).
+  - `checks.tsv` lists what each test must leave in the Global Storage.
+  - Their data is in `tests/datasets/`.
+- **`testbed/`**: a small copy of Deucalion on three Lima VMs. `make` at the repository root drives
+  it, and runs the same `deploy/deucalion` scripts there as a user without root.
+- **`experiments/reverse-tunnel/`**:
+  - the record of the first trial of interLink 0.6.3 on the testbed;
+  - in `upstream/`, the plugin patch that would remove the last wrapper.
 
-One command switches between them, on the testbed (`make init-old` / `make init-new`) and on Deucalion (`make split` / `make reverse` in `deploy/deucalion`, steps in [RUN_ON_ULISSES.md](RUN_ON_ULISSES.md)). Why things are the way they are, change by change: [CHANGELOG.md](CHANGELOG.md).
+## Versions in git
 
-## How to run
+| Tag | What it holds |
+|---|---|
+| `split-interlink-0.6.1` | The earlier approach (below), together with the reverse tunnel as a second mode: `make split` / `make reverse` on Deucalion, tests T0 and T1 on the testbed. It also holds Isabel's original setup and tests as they were copied here |
+| `reverse-interlink-0.6.3` | This version: interLink 0.6.3 and the reverse tunnel only |
 
-**[HOW_TO_RUN.md](HOW_TO_RUN.md)** gives the steps for both modes, first on the local testbed and then on Deucalion through Ulisses. [APPROACH.md](APPROACH.md) explains how they work, what the scripts do, and the test results.
+To look at the earlier code without leaving `main`, run `git show split-interlink-0.6.1:<path>`, or
+`git worktree add ../ze-split split-interlink-0.6.1`.
 
-## Important Notes
-- This repository currently contains placeholder account keys only.
-- Personal account key files required by the code are not present in the repository, so it is not possible to fully replicate the setup.
-- The values shown in the scripts are not the real MinIO credentials and should be replaced with valid keys before running the storage setup and access.
-> Later there will be variables for defining this account specific files.
+## How it worked before
 
-## Directory Structure
+Until 24 Nov 2026 the default was the **split executor**, on interLink 0.6.1.
+- **The split:** a pod's `init` and `wait` containers, the only ones that need the network, ran on
+  the HPC login node. Only `main` ran in the Slurm job, and they coordinated through the shared file
+  system.
+- **Its code:** three wrappers replaced the `sbatch`, `squeue` and `scancel` the plugin calls. A relay
+  let the login node reach the Kubernetes API.
+- **How it compared:** it passed the same tests and was faster, about 30 s against 1.5 min for a short
+  step on the testbed. But it meant maintaining four pieces of code tied to interLink 0.6.1's job
+  script, and `main` had no network.
 
-- **setup/** - Infrastructure setup scripts
-  - `global_storage/` - Cloud storage deployment. Contains `README.md`, `main.sh`, `cleanup.sh`, and `.env.example`
-  - `hpc/` - High-Performance Computing deployment. Contains `README.md`, `main.sh`, `cleanup.sh`, and `.env.example`
-    - `split-executor/` - `split`: the three wrappers (`sbatch`, `squeue`, `scancel`) and the Kubernetes API relay
-    - `subpath-fix/` - `reverse`: the one wrapper still needed with interLink 0.6.3 (plugin ignores `subPath` on emptyDirs)
-  - `kubernetes/` - Kubernetes cluster deployment. Contains `README.md`, `main.sh`, `cleanup.sh`, and `.env.example`
-- **deploy/deucalion/** - Scripts that switch either mode on and off over the existing deployment (`hpc-side.sh`, `k8s-side.sh`)
-- **tests/** - Test suites and validation
-  - `datasets/` - test datasets for each workflow test
-  - `workflows/` - Isabel's Argo workflow tests (sync modules and resource templates)
-  - `argo-native/` - the same tests as plain Argo workflows with native artifacts, used by both modes
-- **testbed/** - A small copy of Deucalion on Lima VMs; `make` at the repository root drives it
-- **experiments/reverse-tunnel/** - How `reverse` was first tried on the testbed (`make init-new`), and the plugin patch to propose upstream
-- **docs/img/** - Architecture diagrams
+interLink 0.6.3's reverse tunnel replaced it. [APPROACH.md](APPROACH.md), section 6, compares the
+two, and the code is in the tag `split-interlink-0.6.1`.
 
-## Setup of the original prototype
+## Credentials
 
-### Prerequisites
-- Kubernetes cluster machine access (ssh)
-- HPC environment access (ssh)
-- Access to cloud storage credentials
-
-### Installation
-
-Run the setup scripts in order:
-
-```bash
-# Global storage setup
-sudo ./setup/global_storage/main.sh
-
-# For Kubernetes
-sudo ./setup/kubernetes/main.sh
-
-# For HPC
-sudo ./setup/hpc/main.sh
-```
-Each setup subdirectory includes its own `README.md` and a `cleanup.sh` helper.
-
-### Testing
-
-Run tests to validate your setup:
-1. Add the files in `/tests/datasets` to the MinIO DB.
-2. Run the tests in `/tests/workflows` in the Argo UI.
-
-To test the plain Argo workflows in either mode instead, follow [HOW_TO_RUN.md](HOW_TO_RUN.md).
+No real keys are in this repository.
+- **Where the Global Storage keys go:** in `deploy/deucalion/deucalion.env`, which git ignores. Copy it
+  from `deucalion.env.example` with `make env`.
+- **What the scripts keep private:** the keys never go to the login node, and interLink's logs are
+  private. `make evidence` blanks every secret in what it collects, then checks that none is left.
