@@ -12,6 +12,34 @@ three Lima VMs.
 
 ---
 
+## 2026-11-24: first plain Argo workflows on Deucalion; Ctrl-C stops `make test`
+
+**Result.** The first runs on the real site, in `reverse` mode (interLink 0.6.3), on `normal-x86`:
+- **Setup:** the jobs went from Ulisses to the login node `ln01` as `jcosta.up`. The images were
+  built with the method of the entry below, and the Global Storage was the MinIO inside the
+  cluster.
+- **TC00 passed** (`20261124-010849-reverse`, 2 min 09 s).
+- **A full run then passed TC00 to TC03** (`20261124-011219-reverse`): 2 min 16 s, 2 min 58 s,
+  3 min 05 s (TC02 ends `Failed` on purpose) and 2 min 07 s. It was then interrupted.
+
+Each time includes the queue of `normal-x86`.
+
+**Bug: Ctrl-C did not stop `make test`.**
+- **Cause:** the runner waits for each workflow with `timeout 1800 argo wait`. Without
+  `--foreground`, GNU `timeout` runs in its own process group, which the terminal's SIGINT does not
+  reach.
+- **Effect:** bash got the signal, but there was no trap and its child did not die of SIGINT, so it
+  went on to the next test.
+- **Fix:** `timeout --foreground` and a trap that stops the run and says what is still running.
+  Evidence, from a replica of the loop with job control (as in a terminal), with `sleep` standing in
+  for `argo wait`:
+  - without `--foreground`, the trap fired only after the current wait ended (19 s);
+  - with it, at once (0 s, exit code 130).
+- An interrupted run leaves the workflow already submitted running on the HPC side. `make clean`
+  deletes it, and interLink then cancels its Slurm job.
+
+---
+
 ## 2026-11-24 (later): images built without `singularity pull` on the login node
 
 **Context.** The first `make reverse` on Deucalion stopped in `hpc images`. `singularity pull`

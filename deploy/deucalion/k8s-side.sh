@@ -815,12 +815,14 @@ YAML
     gs || exit 1
     say "run $RUN, mode $m (interLink $(il_version)): tests $tests -> $OUT"
     echo "mode $m, interLink $(il_version), partition $SLURM_PARTITION" >"$OUT/summary.txt"
+    trap 'say ""; say "interrupted: results so far in $OUT/summary.txt. The workflow already submitted keeps running on the HPC side; ./k8s-side.sh clean (make clean) deletes it and cancels its job."; exit 130' INT TERM
     for T in $tests; do
       WF="$(ls "$N/$T"-*.yaml 2>/dev/null | head -n 1)"; [ -n "$WF" ] || { say "TC$T  no workflow file"; continue; }
       D="$OUT/TC$T"; mkdir -p "$D"; cp "$WF" "$D/workflow.yaml"
       start=$(date +%s)
       NAME="$(argo submit -n "$NS" "$WF" -l "$LABEL" -o json | jq -r .metadata.name)" || { say "TC$T  submit failed"; continue; }
-      rc=0; timeout 1800 argo wait -n "$NS" "$NAME" >/dev/null 2>&1 || rc=$?
+      # --foreground: without it timeout runs in its own process group, out of reach of Ctrl-C.
+      rc=0; timeout --foreground 1800 argo wait -n "$NS" "$NAME" >/dev/null 2>&1 || rc=$?
       [ "$rc" -eq 124 ] && { argo stop -n "$NS" "$NAME" >/dev/null 2>&1; sleep 10; }
       secs=$(( $(date +%s) - start ))
       argo get -n "$NS" "$NAME" -o json >"$D/workflow.json" 2>/dev/null || echo '{}' >"$D/workflow.json"
