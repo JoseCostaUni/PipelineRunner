@@ -12,6 +12,47 @@ three Lima VMs.
 
 ---
 
+## 2026-11-24 (later): images built without `singularity pull` on the login node
+
+**Context.** The first `make reverse` on Deucalion stopped in `hpc images`. `singularity pull`
+failed with `mksquashfs: FATAL ERROR: Failed to create thread`. Measured on `ln01`:
+- 256 CPUs;
+- `pids.max = 150` in the user's cgroup (`user.slice/user-<uid>.slice`);
+- `mksquashfs procs = 0` in `/etc/singularity/singularity.conf`, so one thread per CPU.
+
+So `mksquashfs` asks for 256 threads where 150 are allowed. `taskset` doesn't help: this
+`mksquashfs` (4.3, 2014) counts every CPU on the machine.
+
+**Alternatives measured on `ln01`** (scripts run as `jcosta.up`, results in this entry):
+- **Unpacked sandbox written straight to `/home`:** works (alpine runs), but took 4 min 14 s for
+  alpine. NFS is slow at creating many small files. The same sandbox takes 1 s to build in the
+  local `/tmp`, and copying its 545 files to `/home` took 39 s.
+- **Sandbox in the local `/tmp`, then our own `mksquashfs -processors 4` into one file on `/home`:**
+  alpine took 2 s (3.4 MB), argoexec 11 s (64 MB, 1415 files).
+  - Both run with `singularity exec --contain --no-eval`, as the plugin runs them. A plain
+    squashfs file is an image format singularity accepts, like a SIF.
+
+**What changed.** `hpc-side.sh images` uses the second method whenever `mksquashfs` is on the
+`PATH`, and falls back to `singularity pull` otherwise. The temporary files, including
+singularity's cache, live in a folder under the local `/tmp` that is removed afterwards.
+
+**Risk for `split` on Deucalion.** The same 150-process limit covers everything the user runs on
+the login node:
+- the sidecar;
+- the relay;
+- in `split`, `init` and `wait` of every running pod, each a singularity process with Go threads.
+
+Several parallel steps may hit it. Not measured yet.
+
+**Evidence (testbed).** The image folder was emptied first, so that `make reverse` had to rebuild
+the images with the new method (`/sbin/mksquashfs` is on the `PATH` there):
+- **Images:** alpine and argoexec came out as single files, 3.9 MB and 61 MB. `file` identifies
+  them as `Squashfs filesystem ... version 4.0`. Nothing was left in `/tmp`.
+- **TC00 passed with the plugin running these images** (`20261124-005749-reverse`, 1 min 31 s),
+  against the MinIO inside the cluster.
+
+---
+
 ## 2026-11-24: a Global Storage inside the cluster; `sync` sends only what the login node needs
 
 **Context.** Isabel's MinIO did not answer from anywhere (entry below), which blocks both modes. The

@@ -300,12 +300,28 @@ UNIT
 
   images)
     mkdir -p "$IMG"
+    # Each image is unpacked in the login node's local /tmp and packed into one squashfs file, which
+    # singularity runs like a SIF. 'singularity pull' fails on Deucalion: its mksquashfs starts one
+    # thread per CPU (256) and a user may run 150 ('Failed to create thread'). Calling mksquashfs
+    # ourselves sets the thread count, and one file is fast to write on NFS, unlike an unpacked image.
+    sq="$(command -v mksquashfs || true)"
     for ref in $IMAGES $ARGO_EXEC_IMAGE; do
       dest="$IMG/$ref"
       mkdir -p "$(dirname "$dest")"
       if [ -s "$dest" ]; then say "have  $ref"; continue; fi
       say "pull  $ref"
-      singularity pull "$dest" "docker://$ref" || { say "ERROR: pull of $ref failed"; exit 1; }
+      tmp="$(mktemp -d /tmp/lisa-img.XXXXXX)"; mkdir -p "$tmp/cache" "$tmp/tmp"
+      export SINGULARITY_CACHEDIR="$tmp/cache" SINGULARITY_TMPDIR="$tmp/tmp" APPTAINER_CACHEDIR="$tmp/cache" APPTAINER_TMPDIR="$tmp/tmp"
+      if [ -n "$sq" ]; then
+        singularity build --fix-perms --sandbox "$tmp/root" "docker://$ref" >"$tmp/log" 2>&1 \
+          && "$sq" "$tmp/root" "$dest.part" -noappend -all-root -processors 4 >>"$tmp/log" 2>&1 \
+          && mv -f "$dest.part" "$dest"
+      else
+        singularity pull "$dest" "docker://$ref" >"$tmp/log" 2>&1
+      fi
+      rc=$?
+      [ "$rc" -eq 0 ] || { tail -n 5 "$tmp/log"; rm -rf "$tmp" "$dest.part"; say "ERROR: pull of $ref failed"; exit 1; }
+      rm -rf "$tmp"
     done
     chmod -R a+rX "$IMG"
     find "$IMG" -type f -printf '%10s  %p\n'
