@@ -169,7 +169,9 @@ def test_cnes_templates_move_to_our_namespace(tmp_path):
     env.write_text(env.read_text() + f"CNES_TEMPLATES={f}\nMIRROR_PRIVATE_TOKEN=x\n")
     ctx.settings = Settings.load(env)
     (t,) = cnes.templates(ctx)
-    assert t["metadata"] == {"name": "common-templates", "namespace": "lisa-jcosta",
-                             "labels": {"app.kubernetes.io/managed-by": "lisa-runner"}}
+    # Only the namespace changes: their metadata otherwise as in their file, their spec untouched.
+    assert t["metadata"] == {"name": "common-templates", "generateName": "common-templates-",
+                             "namespace": "lisa-jcosta"}
+    assert t["spec"] == {"templates": []}
     assert cnes.available(ctx.settings)
     assert not cnes.available(context(tmp_path, mirror=True).settings)    # no templates named

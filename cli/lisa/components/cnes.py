@@ -13,7 +13,7 @@ import yaml
 
 from .. import LisaError
 from ..context import Context
-from ..paths import OWNER, REPO
+from ..paths import REPO
 from ..templates import render_one
 from . import global_storage
 
@@ -27,7 +27,8 @@ def available(s) -> bool:
 
 
 def templates(ctx: Context) -> list[dict]:
-    """The WorkflowTemplates in CNES_TEMPLATES, moved to ARGO_NAMESPACE and labelled as ours."""
+    """The WorkflowTemplates in CNES_TEMPLATES, exactly as in their files but for the namespace they are
+    installed in (ARGO_NAMESPACE), as CNES's chart installs them in each DCC's namespaces."""
     out = []
     for name in ctx.settings.cnes_templates:
         path = Path(name) if Path(name).is_absolute() else REPO / name
@@ -37,10 +38,7 @@ def templates(ctx: Context) -> list[dict]:
         for doc in yaml.safe_load_all(path.read_text()):
             if not doc or doc.get("kind") != "WorkflowTemplate":
                 continue
-            meta = doc["metadata"]
-            meta.pop("generateName", None)
-            meta["namespace"] = ctx.settings.namespace
-            meta.setdefault("labels", {})["app.kubernetes.io/managed-by"] = OWNER
+            doc["metadata"]["namespace"] = ctx.settings.namespace
             out.append(doc)
     return out
 

@@ -38,8 +38,9 @@ ConfigMaps of their Helm chart. The private image their ingest runs already work
   which the mirror fetches) and `registry_sys: gitlab.esa.int/` (ESA's images as the mirror serves
   them). No `global-index-url`, so their dispatch skips LISA's global index.
 - **`cli/lisa/components/cnes.py`, run by `make up` when `CNES_TEMPLATES` is set:** applies their
-  WorkflowTemplates from the files named there (local clones; moved to `ARGO_NAMESPACE`, labelled as
-  ours), the platform-config-map, and the stress test's input in the GlobalStorage
+  WorkflowTemplates from the files named there (local clones), exactly as in their files but for the
+  namespace they are installed in (`ARGO_NAMESPACE`; theirs names `argo-ddpc-systeam`), the
+  platform-config-map, and the stress test's input in the GlobalStorage
   (`globalstorage-test/stress-pipeline/inputs/idefix.h5`, 10 MiB of random bytes, as their script makes).
   Nothing of theirs is copied into this repository: their code is ESA's, private, and this repository
   may be public.
@@ -68,6 +69,13 @@ ConfigMaps of their Helm chart. The private image their ingest runs already work
   carries (start small, then one parameter at a time).
 
 **Evidence.**
+- **Their files, unchanged.** What is applied differs from their files only in `metadata.namespace`
+  (their `spec`s compared equal, after a first version had also dropped `generateName` and added our
+  label: both put back, as the user asked that nothing of theirs be changed). The files used, by git blob
+  hash (`git hash-object <file>`, comparable with `git ls-tree` in their repositories):
+  `stress-pipeline.yaml` `0b993098df632eb32c7b8ef25465df05b06a5e59` (mockpipelines `main`, `6546a61`;
+  the same as tag `1.0.0`, which their document links to), `CommonTemplates.yaml`
+  `175bb7063e7914e103805d785d59bb77e30d1bdb` (components/pipelinerunner, `main`, fetched 25 Nov 2026).
 - Their files against ours: loaded by `cnes.templates` (common-templates: 12 templates;
   stress-pipeline: 5), the ConfigMap keys they read (9 in `artifact-repositories`, `registry` and
   `registry_sys`) all present, and the three step names TC20 checks all in their files.
