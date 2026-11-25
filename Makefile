@@ -40,8 +40,8 @@ check: uv ## Read-only checks of both sides and a compute node (output kept in r
 up: uv ## Both sides up: sidecar, interLink with the reverse tunnel, artifacts, offload
 	$(LISA) up
 
-test: uv ## Run the tests (T="00 11" for some); report in results/<run>/report.md
-	$(LISA) test $(T)
+test: uv ## Run the tests (T="00 11" for some; TIMEOUT=3600 for longer ones); report in results/<run>/report.md
+	$(LISA) test $(T) $(if $(TIMEOUT),--timeout $(TIMEOUT))
 
 evidence: uv ## Configuration, versions, logs and Slurm's record of the last run (RUN=<folder> for another)
 	$(LISA) evidence $(RUN)

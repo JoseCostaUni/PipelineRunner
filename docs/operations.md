@@ -168,7 +168,7 @@ cd ~/PipelineRunner && vi settings/deucalion.env
 #   IMAGE_MIRROR=on, MIRROR_PRIVATE_USER, MIRROR_PRIVATE_TOKEN (their ingest runs a private image), and
 #   CNES_TEMPLATES="../pipelinerunner/pipelineexecutor/argo/argoworkflows/chart/files/argo-workflows/workflows/common/CommonTemplates.yaml ../mockpipelines/workflows/stress-pipeline.yaml"
 make up              # also applies their templates, the platform-config-map, and the stress test's input
-make test T=20
+make test T=20 TIMEOUT=3600     # about ten pods, several in a row: longer than the default 30 minutes
 ```
 
 - **Their two storages, here:** their LocalStorage is our Global Storage (the default artifact

@@ -50,7 +50,8 @@ ConfigMaps of their Helm chart. The private image their ingest runs already work
   the ingest's reference scan, the final output, the dispatch's transfer. A new feature `cnes`
   (templates, mirror, token).
 - `lisa test` accepts step checks on a workflow that uses a `workflowTemplateRef` (its entrypoint is in
-  the template).
+  the template). `make test TIMEOUT=<seconds>` sets how long a workflow may run (default 1800): TC20 is
+  about ten pods, five of them in a row in the ingest, each with its queue and tunnel.
 - **The release of stuck pods, corrected** (`testing/runner.py`). The evening's version deleted a test's
   pods only when its workflow was still unfinished after the timeout. But Argo's stop marks the workflow
   Failed within seconds while the stuck pod keeps running, so that never fired: TC20's scanner pod on the
