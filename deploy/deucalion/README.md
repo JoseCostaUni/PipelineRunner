@@ -53,8 +53,35 @@ Run either script without arguments to list its commands.
     the sidecar only if the configuration changed.
   - **Images:** `hpc-side.sh images` builds every image in `IMAGES`, plus Argo's executor, as one
     squashfs file each.
-- **Through the tunnel:** the jobs reach the Global Storage, the Kubernetes API, and anything in
-  `EXTRA_FORWARDS`.
+- **Through the tunnel:** the jobs reach the Global Storage, the Kubernetes API, the image mirror
+  (`IMAGE_MIRROR=on`), and anything in `EXTRA_FORWARDS`.
+
+The diagrams in [`../../docs/diagrams/`](../../docs/diagrams/) show all of this.
+
+## The image mirror
+
+Compute nodes cannot pull images. With `IMAGE_MIRROR=off`, every image a pod names must be built
+beforehand on the login node (`IMAGES`). With `IMAGE_MIRROR=on`, a workflow can name any image, as on
+any Kubernetes cluster, and nothing in it changes:
+- **The mirror:** `make up` starts zot in `ARGO_NAMESPACE` (`image-mirror.yaml`, Service
+  `image-mirror`). It fetches each image on demand from its registry and keeps it: `quay.io/...` from
+  quay.io, `ghcr.io/...` from ghcr.io, and a bare name such as `alpine:3.20` from Docker Hub, as
+  Kubernetes reads it.
+- **How a job reaches it:** every pod gets a forward to it through the tunnel. The plugin's
+  `ImagePrefix` is `docker://127.77.0.1:5000/`, so the job's Singularity pulls each image from the
+  pod's relay, over plain HTTP (`--no-https`), converts it once and keeps it in `$HOME/.singularity`.
+- **Why a fixed address:** Singularity pulls before the container exists, where the tunnel's names do
+  not resolve. So every pod's relay takes the same address (`interlink.eu/reverse-bind: 127.77.0.1`,
+  in `workflowDefaults`), and two pods must not share a compute node: each asks for a whole node
+  (`--exclusive`). `make check` shows whether the partition gives whole nodes anyway
+  (`OverSubscribe=EXCLUSIVE`).
+- **Slurm must end a job's relay with the job.** Otherwise the next job on that node finds the address
+  taken. `proctrack/cgroup` does this; `proctrack/linuxproc`, the testbed's, loses the relay, which
+  the job starts in the background. `make check` fails with the mirror on unless it is `cgroup`.
+- **What would remove all three:** interLink could set the image prefix to each pod's own relay
+  address (`NEXT_STEPS.md`).
+- **Tested** on the testbed (TC00 and TC12 with nothing built beforehand); not yet on Deucalion. The
+  testbed keeps `IMAGE_MIRROR=off` because of its `linuxproc`.
 
 ## What changes, and how to undo it
 
@@ -62,16 +89,18 @@ Run either script without arguments to list its commands.
 |---|---|---|
 | Ulisses, `~/lisa-trial/` | interLink 0.6.3 binaries, the Go toolchain and sources for building them, configs, logs, saved settings, the login node's pinned host key, `argo` and `mc` if they were missing | `rm -rf ~/lisa-trial` after `make restore` |
 | Ulisses, namespace `argo` | Argo Workflows `ARGO_VERSION`, only if the cluster had none (`make setup`) | `kubectl delete -n argo -f <Argo's install.yaml>`, if nobody else uses it |
-| Ulisses, Argo `workflow-controller-configmap` | `workflowDefaults` send every workflow's pods to your node, partition `SLURM_PARTITION`, with the annotation `interlink.eu/reverse-forwards` | `make restore` (offload off) puts back exactly what was there |
+| Ulisses, Argo `workflow-controller-configmap` | `workflowDefaults` send every workflow's pods to your node, partition `SLURM_PARTITION`, with the annotation `interlink.eu/reverse-forwards`; with `IMAGE_MIRROR=on` also `interlink.eu/reverse-bind` and `--exclusive` | `make restore` (offload off) puts back exactly what was there |
 | Ulisses, namespace `ARGO_NAMESPACE` | the namespace itself, if it did not exist; Role and RoleBinding `argo-workflow-role` for its `default` service account; `artifact-repositories` ConfigMap (an existing one is saved first), Secret `lisa-gs-creds`, WorkflowTemplate `lisa-modules` | `make restore` puts a saved ConfigMap back; `kubectl delete ns ARGO_NAMESPACE` removes the rest |
 | Ulisses, namespace `ARGO_NAMESPACE` | Service and EndpointSlice `GS_SERVICE` (the Global Storage under a name), when it is outside the cluster | `make restore` |
 | Ulisses, namespace `ARGO_NAMESPACE`, with `GS_ENDPOINT=cluster` | Deployment `lisa-minio`, Service `GS_SERVICE`, Secret `lisa-minio-root`: a MinIO as the Global Storage, data in an `emptyDir` (lost when the pod restarts) | `make minio-off` (`make restore` leaves it) |
+| Ulisses, namespace `ARGO_NAMESPACE`, with `IMAGE_MIRROR=on` | Deployment, Service and ConfigMap `image-mirror`: zot, the image mirror, its images in an `emptyDir` | `make mirror-off` (`make restore` leaves it) |
 | Ulisses, namespace `INTERLINK_NODE_NAME` | Secret `trial-hpc-ssh-key` (**the private key `SSH_KEY`**, for the shadow's SSH to the login node) and ConfigMap `trial-hpc-known-hosts`; interLink copies both into each shadow namespace (`<namespace>-shadow`) | `make restore` deletes them and every copy |
 | Ulisses, node `INTERLINK_NODE_NAME` | the virtual node, registered by the virtual kubelet, and its approved serving certificate request | `make restore` deletes both |
 | Ulisses, containerd | image `ghcr.io/interlink-hq/interlink/ssh-tunnel:0.6.3`, pulled by the kubelet | stays (it needs root to remove) |
 | Deucalion, `HPC_PROJECT_ROOT/.interlink/` | Slurm plugin 0.6.3, `SlurmConfig.yaml`, `sidecar.log`, the job folders (`jobs/`) | delete the folder after `make restore` |
 | Deucalion, `HPC_PROJECT_ROOT/reverse-tunnel/` | the subPath fix, `resources.sh`, the socket folder `sock/` | delete the folder |
-| Deucalion, `HPC_PROJECT_ROOT/images/` | the pre-built images | delete the folder |
+| Deucalion, `HPC_PROJECT_ROOT/images/` | the pre-built images (`IMAGE_MIRROR=off`) | delete the folder |
+| Deucalion, `~/.singularity/cache` (or `~/.apptainer/cache`) | images the jobs pulled from the mirror (`IMAGE_MIRROR=on`) | `singularity cache clean`, or delete the folder |
 | Deucalion, `HPC_PROJECT_ROOT/lisa-pipeline-runner_ze/` | these scripts and `setup/hpc`, with the settings but without the MinIO keys (`make sync`) | delete the folder |
 | Deucalion, `~/.config/systemd/user/` | the user service `lisa-sidecar` (enabled); linger if the site allows it | `make restore` stops and removes the service |
 | Deucalion, job folders | data, artifact keys and tokens of each pod while it runs | `make clean` (part of `make restore`). Plugin 0.6.3 leaves an empty folder per pod |
@@ -81,6 +110,7 @@ Run either script without arguments to list its commands.
 
 - **Ulisses:**
   - `kubectl`, `jq`, `curl`, `ssh`, `ssh-keyscan`, `setsid`, `openssl`, `git` and `tar`;
+  - `python3` 3.6 or newer, for the tests (`tests/argo-native/run.py`, standard library only);
   - internet access to github.com and go.dev, for `make setup`, and to ghcr.io, for the shadow image;
   - `argo` and `mc` are fetched into `~/lisa-trial/bin` if missing.
 - **Login node:**

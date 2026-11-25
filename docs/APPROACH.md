@@ -49,6 +49,10 @@ node's `sshd` is never asked to forward.
 
 The job's log shows `interLink: reverse tunnel ready after <n>s` in every container before it starts.
 
+The diagrams in [`docs/diagrams/`](docs/diagrams/) show it: `deployment.svg` (what runs where),
+`submission.svg` (one step, from Argo to the Slurm job and back), `communication.svg` (interLink's
+calls and the reverse tunnel) and `images.svg` (where images come from).
+
 ### 2.2 What is configuration, and what is still ours
 
 Almost everything is configuration:
@@ -62,7 +66,9 @@ Almost everything is configuration:
 - **Argo `workflowDefaults`:**
   - the pods' node selector and toleration for the virtual node;
   - the Slurm account and partition;
-  - the annotation `interlink.eu/reverse-forwards`, which names what the tunnel carries.
+  - the annotation `interlink.eu/reverse-forwards`, which names what the tunnel carries;
+  - with the image mirror, a fixed relay address (`interlink.eu/reverse-bind`) and `--exclusive`
+    (section 2.3).
 
   The workflows themselves stay plain Argo.
 - **Slurm plugin:**
@@ -71,7 +77,8 @@ Almost everything is configuration:
   - `--no-eval`: Apptainer would otherwise evaluate every environment value a second time and corrupt
     Argo's `ARGO_TEMPLATE`;
   - `--contain`: each container gets its own `/tmp`, as in Kubernetes;
-  - `ImagePrefix`: images pulled beforehand, because compute nodes cannot pull;
+  - `ImagePrefix`: where images come from. Compute nodes cannot pull from the internet, so either
+    images built beforehand on the login node, or the image mirror through the tunnel (section 2.3);
   - a fixed node capacity (`ResourceScriptPath`). Plugin 0.6.3 otherwise reports the free memory it
     sees, which fell below one pod's request on the testbed and left pods `Pending`.
 - **Kubernetes:** the Global Storage under a Service name, because the tunnel maps names, not IP
@@ -87,6 +94,26 @@ One wrapper is still ours, `setup/hpc/subpath-fix/sbatch`, set as the plugin's `
 - **The fix belongs in the plugin.** `experiments/reverse-tunnel/upstream/` has a 9-line patch with a
   unit test. The plugin's `main` still had the gap on 24 Nov 2026, and nobody had reported it. Once a
   fix is released, no wrapper is left.
+
+### 2.3 Any image: the image mirror
+
+Without more, every image a pod names must be built beforehand on the login node, which has internet.
+With `IMAGE_MIRROR=on`, a workflow names any image, as on any Kubernetes cluster:
+- **A mirror in the cluster:** zot, which fetches each image on demand from its registry (Docker Hub,
+  quay.io, ghcr.io) and keeps it.
+- **Reached through the tunnel:** every pod gets a forward to it. The plugin's `ImagePrefix` is
+  `docker://127.77.0.1:5000/`, so the job's Singularity pulls each image from the pod's relay and
+  converts it on the compute node, once per image (`$HOME/.singularity`).
+- **Platform configuration, not the workflow's:** the plugin's settings and Argo's `workflowDefaults`.
+  TC12 names `busybox:1.37` and nothing else.
+- **The cost of a fixed address.** Singularity pulls before the container exists, where the tunnel's
+  names do not resolve. So every pod's relay takes the same address (`interlink.eu/reverse-bind`), and
+  two pods must not share a node: each asks for a whole node (`--exclusive`). On Deucalion this may
+  cost nothing: parallel steps already ran on separate nodes (`20261124-011219-reverse`). Slurm must
+  also end each job's relay with the job (`proctrack/cgroup`); on the testbed (`proctrack/linuxproc`)
+  a finished job's relay held the address for the next job on that node.
+- **The clean fix is upstream:** interLink could set the image prefix to each pod's own relay address,
+  which it already derives from the pod's UID. That removes the fixed address and `--exclusive`.
 
 ## 3. How it runs on Ulisses and Deucalion
 
@@ -114,7 +141,8 @@ What runs where:
   (`GS_ENDPOINT=cluster`). The jobs reach it through the tunnel either way.
 
 **Evidence of each run:**
-- `results/<run>/where.tsv` lists every step pod's Slurm job, partition and compute node.
+- `results/<run>/where.tsv` lists every step pod's Slurm job, partition and compute node. Every test
+  also checks it: a step pod that was not on the virtual node, or that Slurm has no job for, fails it.
 - `logs.txt` holds every container's own output.
 - TC11 records, from inside a step's container, that no connection to the internet opens.
 - `make evidence` adds the versions (binaries' build commits, release checksums), the configuration
@@ -125,7 +153,7 @@ What runs where:
 The tests are TC00 (one step with an input and an output artifact), Isabel's tests TC01 to TC10
 rewritten as plain Argo workflows (`tests/argo-native/`; TC08 not ported), and TC11 (no internet from
 inside a step). Every result is checked in Argo and in the Global Storage
-(`tests/argo-native/checks.tsv`).
+(`tests/argo-native/checks.py`).
 
 | Run | Where | Result |
 |---|---|---|
@@ -155,8 +183,9 @@ waits for the job to run and starts the `sshd` in it. That took 68 to 80 s per p
   where a user may run 150 processes and threads in all, the sidecar included.
 - **HTTPS would need a matching certificate.** The Global Storage is reached through a Service name,
   so over HTTPS its certificate would have to be valid for that name (MinIO in plain HTTP here).
-- **Images are fixed in advance.** They must be listed and pulled beforehand on the login node, so a
-  workflow cannot name any image it likes.
+- **Images.** With `IMAGE_MIRROR=off`, they must be listed and built beforehand on the login node.
+  With the image mirror any image works, but each pod asks for a whole node, and each new image is
+  converted on the compute node (section 2.3). The mirror has run on the testbed only.
 - **One account per deployment.** All jobs share one Deucalion account, and job folders hold the pods'
   artifact keys and service-account tokens while they run.
 - **Argo's `workflowDefaults` are global.** While offload is on, every workflow of that Argo goes to

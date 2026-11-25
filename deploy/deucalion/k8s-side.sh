@@ -1,7 +1,7 @@
 #!/bin/bash
 # Deucalion, Kubernetes side. Runs on Ulisses as your own user: no root, no sudo. Needs a kubeconfig
 # with cluster-admin (default ~/.kube/config), kubectl, jq, curl, ssh, ssh-keyscan, setsid, openssl, git,
-# and argo + mc ('tools' fetches them). Everything installed here lives in TRIAL_HOME (default
+# python3 (3.6 or newer, for the tests), and argo + mc ('tools' fetches them). Everything installed here lives in TRIAL_HOME (default
 # ~/lisa-trial); what goes into the cluster carries app.kubernetes.io/managed-by=deucalion-trial where it
 # can. Plain Argo workflows run whole on Deucalion's offline compute nodes through interLink 0.6.3 and
 # the reverse tunnel of its SSH shadow. See README.md.
@@ -15,6 +15,8 @@
 #                    the release has none, as for 0.6.3)
 #   minio on|off     with GS_ENDPOINT=cluster: a MinIO inside the cluster as the Global Storage (the
 #                    Service GS_SERVICE in ARGO_NAMESPACE)
+#   mirror on|off    with IMAGE_MIRROR=on: an image mirror inside the cluster (image-mirror.yaml), which
+#                    the jobs reach through the tunnel, so a workflow can use images not built beforehand
 #   sync             copy the scripts and the settings (without the keys) to HPC_REPO_DIR on the login node
 #   hpc <command>    run hpc-side.sh <command> on the login node;  login: a shell there
 #   up               bring both sides up: the sidecar on the login node, interLink here with the reverse
@@ -30,7 +32,9 @@
 #   reset-data       put the test data in the Global Storage back as in tests/datasets, without results
 #                    of earlier runs ('test' does this first)
 #   test [NN ...]    run tests/argo-native (default: all) and check results in Argo AND in the Global
-#                    Storage; results in ./results/<time>/
+#                    Storage; results in ./results/<time>/. The checks are tests/argo-native/checks.py,
+#                    run by run.py there
+#   slurm-jobs       Slurm's record of your recent jobs on the login node (run.py uses it)
 #   evidence [run]   collect what shows how a run ran (default: the last) into results/<run>/evidence:
 #                    configuration, versions, interLink's and the sidecar's logs of the run (secrets
 #                    blanked, then checked), Slurm's record of the jobs
@@ -111,9 +115,18 @@ fi
 GS_HOST="${GS_ENDPOINT%:*}"
 case "$GS_ENDPOINT" in *:*) GS_PORT="${GS_ENDPOINT##*:}";; *) [ "${GS_INSECURE:-true}" = true ] && GS_PORT=80 || GS_PORT=443;; esac
 GS_FQDN="$GS_SERVICE.$NS.svc.cluster.local"
+# IMAGE_MIRROR=on: an image mirror of ours in ARGO_NAMESPACE ('mirror on', image-mirror.yaml). Every
+# pod then pulls its images from it while the job runs (README.md, "The image mirror").
+IMAGE_MIRROR="${IMAGE_MIRROR:-off}"
+MIRROR_BIND="${MIRROR_BIND:-127.77.0.1}"     # the relay address of every pod then (hpc-side.sh: ImagePrefix)
+MIRROR_SERVICE=image-mirror
+MIRROR_FQDN="$MIRROR_SERVICE.$NS.svc.cluster.local:5000"
 # What every pod asks the tunnel for: the Global Storage, the Kubernetes API (on a port an unprivileged
-# sshd can bind), and EXTRA_FORWARDS (space separated, e.g. a message bus: nats.<ns>.svc.cluster.local:4222).
-FORWARDS="$GS_FQDN:$GS_PORT 6443:kubernetes.default.svc.cluster.local:443${EXTRA_FORWARDS:+ $EXTRA_FORWARDS}"
+# sshd can bind), the image mirror if on, and EXTRA_FORWARDS (space separated, e.g. a message bus:
+# nats.<ns>.svc.cluster.local:4222).
+FORWARDS="$GS_FQDN:$GS_PORT 6443:kubernetes.default.svc.cluster.local:443"
+if [ "$IMAGE_MIRROR" = on ]; then FORWARDS="$FORWARDS $MIRROR_FQDN"; fi
+FORWARDS="$FORWARDS${EXTRA_FORWARDS:+ $EXTRA_FORWARDS}"
 
 say()  { printf '%s\n' "$*"; }
 pass() { printf 'PASS  %s\n' "$*"; }
@@ -352,7 +365,7 @@ case "${1:-}:${2:-}" in
     done
     abs_root >/dev/null && pass "HPC_PROJECT_ROOT $HPC_PROJECT_ROOT" || fail "HPC_PROJECT_ROOT must be an absolute path; it is '$HPC_PROJECT_ROOT'"
     [ -r "$SSH_KEY" ] && pass "SSH_KEY $SSH_KEY readable" || fail "SSH_KEY $SSH_KEY not readable"
-    for t in kubectl jq curl ssh ssh-keyscan setsid openssl git tar; do command -v "$t" >/dev/null && pass "found $t" || fail "missing $t"; done
+    for t in kubectl jq curl ssh ssh-keyscan setsid openssl git tar python3; do command -v "$t" >/dev/null && pass "found $t" || fail "missing $t"; done
     for t in argo mc; do command -v "$t" >/dev/null && pass "found $t ($(command -v "$t"))" || fail "missing $t: run './k8s-side.sh tools'"; done
     [ "$(kubectl auth can-i '*' '*' 2>/dev/null)" = yes ] && pass "kubeconfig $KUBECONFIG has cluster-admin" \
       || fail "kubeconfig $KUBECONFIG does not reach the cluster with cluster-admin (kubectl get nodes)"
@@ -407,6 +420,10 @@ case "${1:-}:${2:-}" in
     for p in $PROCS; do proc_up "$p" && say "   $p: running (log $LOGD/$p.log)"; done
     [ "$GS_IN_CLUSTER" = true ] && say "   Global Storage: MinIO in the cluster, $(kubectl -n "$NS" get deploy lisa-minio -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo 0)/1 ready at $GS_ENDPOINT"
     say "   artifact repository endpoint: $(kubectl -n "$NS" get cm artifact-repositories -o jsonpath='{.data.default-v1}' 2>/dev/null | sed -n 's/^ *endpoint: *//p')"
+    if [ "$IMAGE_MIRROR" = on ]; then
+      r="$(kubectl -n "$NS" get deploy "$MIRROR_SERVICE" -o jsonpath='{.status.readyReplicas}' 2>/dev/null)"
+      say "   image mirror: ${r:-0}/1 ready, $MIRROR_FQDN for the jobs"
+    fi
     wd="$(kubectl -n argo get cm "$CM" -o json 2>/dev/null | jq -r '.data.workflowDefaults // ""')"
     case "$wd" in *"$NODE"*) o=on;; *) o=off;; esac
     case "$wd" in *reverse-forwards*) o="$o, with reverse-forwards";; esac
@@ -427,6 +444,7 @@ case "${1:-}:${2:-}" in
     step hpc install
     step hpc images
     [ -x "$IL_DIR/virtual-kubelet" ] || step bash "$0" install
+    if [ "$IMAGE_MIRROR" = on ]; then step bash "$0" mirror on; fi
     step bash "$0" tunnel on
     step bash "$0" artifacts
     step bash "$0" offload on
@@ -628,6 +646,34 @@ YAML
     say "MinIO in $NS deleted, with its data"
     ;;
 
+  mirror:on)
+    # zot, pulling on demand from Docker Hub, quay.io and ghcr.io (image-mirror.yaml). Its data is in
+    # an emptyDir: a cache, which fetches again after a restart.
+    kubectl get ns "$NS" >/dev/null 2>&1 || { say "ERROR: no namespace $NS: run './k8s-side.sh argo' first"; exit 1; }
+    out="$(kubectl -n "$NS" apply -f "$HERE/image-mirror.yaml")" || exit 1
+    case "$out" in *"configmap/$MIRROR_SERVICE configured"*) kubectl -n "$NS" rollout restart deploy/"$MIRROR_SERVICE" >/dev/null;; esac
+    kubectl -n "$NS" rollout status deploy/"$MIRROR_SERVICE" --timeout=300s >/dev/null \
+      || { say "ERROR: the image mirror did not start: kubectl -n $NS describe pod -l app=$MIRROR_SERVICE"; exit 1; }
+    ip="$(kubectl -n "$NS" get svc "$MIRROR_SERVICE" -o jsonpath='{.spec.clusterIP}')"
+    # Ask it for Argo's executor image: it fetches it from its registry now, which shows that the
+    # mirror reaches the registries. Until kube-proxy routes the new Service, there is no answer (000).
+    accept='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json'
+    for _ in $(seq 1 30); do
+      code="$(curl -s -m 120 -o /dev/null -w '%{http_code}' -H "Accept: $accept" "http://$ip:5000/v2/${ARGO_EXEC_IMAGE%:*}/manifests/${ARGO_EXEC_IMAGE##*:}")"
+      [ "$code" != 000 ] && break; sleep 2
+    done
+    [ "$code" = 200 ] || { say "ERROR: the image mirror answered HTTP $code for $ARGO_EXEC_IMAGE: does the cluster reach its registry? kubectl -n $NS logs deploy/$MIRROR_SERVICE"; exit 1; }
+    say "image mirror in $NS: $ip:5000 from Ulisses, $MIRROR_FQDN for the jobs; it fetched $ARGO_EXEC_IMAGE"
+    # A bare name means Docker Hub, as for Kubernetes: alpine:3.20 is docker.io/library/alpine:3.20.
+    code="$(curl -s -m 120 -o /dev/null -w '%{http_code}' -H "Accept: $accept" "http://$ip:5000/v2/alpine/manifests/3.20")"
+    [ "$code" = 200 ] || { say "ERROR: the image mirror answered HTTP $code for alpine:3.20 (a bare Docker Hub name)"; exit 1; }
+    [ "$IMAGE_MIRROR" = on ] || say "Note: IMAGE_MIRROR is not 'on' in $(basename "$ENV_FILE"), so the pods get no forward to it"
+    ;;
+  mirror:off)
+    kubectl -n "$NS" delete -f "$HERE/image-mirror.yaml" --ignore-not-found >/dev/null
+    say "image mirror in $NS deleted, with what it had fetched"
+    ;;
+
   artifacts:)
     [ -f "$N/modules.yaml" ] || { say "ERROR: $N missing"; exit 1; }
     gs || exit 1
@@ -685,6 +731,13 @@ YAML
     # Saved as JSON, so 'off' can tell "absent" (null) from any value and put back exactly what was there.
     SAVED="$STATE/workflowDefaults.json"
     [ -f "$SAVED" ] || kubectl -n argo get cm "$CM" -o json | jq '.data.workflowDefaults' >"$SAVED"
+    # With the image mirror, the job's Singularity pulls each image before the container exists, where
+    # the tunnel's names do not resolve: the plugin's ImagePrefix names the relay by address, so every
+    # pod's relay takes the same one, and two pods must not share a node (--exclusive).
+    flags="--account=$SLURM_ACCOUNT --partition=$SLURM_PARTITION"
+    bind=""
+    if [ "$IMAGE_MIRROR" = on ]; then flags="$flags --exclusive"; bind="
+      interlink.eu/reverse-bind: \"$MIRROR_BIND\""; fi
     defaults="spec:
   nodeSelector:
     kubernetes.io/hostname: $NODE
@@ -693,12 +746,13 @@ YAML
     operator: Exists
   podMetadata:
     annotations:
-      slurm-job.vk.io/flags: \"--account=$SLURM_ACCOUNT --partition=$SLURM_PARTITION\"
-      interlink.eu/reverse-forwards: \"$FORWARDS\""
+      slurm-job.vk.io/flags: \"$flags\"
+      interlink.eu/reverse-forwards: \"$FORWARDS\"$bind"
     # Every pod asks for the tunnel to the Global Storage, the Kubernetes API and EXTRA_FORWARDS.
     kubectl -n argo patch cm "$CM" --type merge -p "$(jq -n --arg v "$defaults" '{data: {workflowDefaults: $v}}')" >/dev/null
     sleep 5
     say "offload ON: every workflow's pods go to $NODE, partition $SLURM_PARTITION, tunnel to: $FORWARDS"
+    if [ "$IMAGE_MIRROR" = on ]; then say "images: from the image mirror, each pod on a node of its own (relay $MIRROR_BIND, --exclusive)"; fi
     say "Note: this applies to ALL workflows of this Argo, other users' too. Switch off after the trial."
     ;;
   offload:off)
@@ -769,71 +823,22 @@ YAML
     [ "$ep" = "$(gs_endpoint)" ] || { say "ERROR: the artifact repository points to '$ep', the jobs need '$(gs_endpoint)': run './k8s-side.sh artifacts'"; exit 1; }
     wd="$(kubectl -n argo get cm "$CM" -o json | jq -r '.data.workflowDefaults // ""')"
     case "$wd" in *"$NODE"*reverse-forwards*) ;; *) say "ERROR: offload is off or set without the tunnel: run './k8s-side.sh offload on'"; exit 1;; esac
-    tests="$*"; [ -n "$tests" ] || tests="$(ls "$N" | sed -n 's/^\([0-9][0-9]\)-.*\.yaml$/\1/p' | tr '\n' ' ')"
-    RUN="$(date +%Y%m%d-%H%M%S)"; OUT="$HERE/results/$RUN"; mkdir -p "$OUT"
+    RUN="$(date +%Y%m%d-%H%M%S)"; OUT="$HERE/results/$RUN"; mkdir -p "$OUT/config"
     bash "$0" reset-data || exit 1
     gs || exit 1
-    say "run $RUN (interLink $(il_version), reverse tunnel): tests $tests -> $OUT"
-    echo "interLink $(il_version) with the reverse tunnel, partition $SLURM_PARTITION" >"$OUT/summary.txt"
-    printf 'test\tpod\tkubernetes node\tslurm job\tpartition\tcompute node\tslurm state\n' >"$OUT/where.tsv"
     # The configuration of both sides as this run uses it ('evidence' later sees only what is on then).
-    mkdir -p "$OUT/config"; cp "$CONF"/*.yaml "$OUT/config/" 2>/dev/null
+    cp "$CONF"/*.yaml "$OUT/config/" 2>/dev/null
     hpc status >"$OUT/config/login-node-status.txt" 2>&1
-    trap 'say ""; say "interrupted: results so far in $OUT/summary.txt. The workflow already submitted keeps running on the HPC side; ./k8s-side.sh clean (make clean) deletes it and cancels its job."; exit 130' INT TERM
-    for T in $tests; do
-      WF="$(ls "$N/$T"-*.yaml 2>/dev/null | head -n 1)"; [ -n "$WF" ] || { say "TC$T  no workflow file"; continue; }
-      D="$OUT/TC$T"; mkdir -p "$D"; cp "$WF" "$D/workflow.yaml"
-      start=$(date +%s)
-      NAME="$(argo submit -n "$NS" "$WF" -l "$LABEL" -o json | jq -r .metadata.name)" || { say "TC$T  submit failed"; continue; }
-      # --foreground: without it timeout runs in its own process group, out of reach of Ctrl-C.
-      rc=0; timeout --foreground 1800 argo wait -n "$NS" "$NAME" >/dev/null 2>&1 || rc=$?
-      [ "$rc" -eq 124 ] && { argo stop -n "$NS" "$NAME" >/dev/null 2>&1; sleep 10; }
-      secs=$(( $(date +%s) - start ))
-      argo get -n "$NS" "$NAME" -o json >"$D/workflow.json" 2>/dev/null || echo '{}' >"$D/workflow.json"
-      PHASE="$(jq -r '.status.phase // "Unknown"' "$D/workflow.json")"
-      jq -r '(.status.nodes // {}) | to_entries[] | .value | select(.type == "Pod") | [.displayName, .phase] | @tsv' \
-        "$D/workflow.json" | sort >"$D/steps.tsv"
-      # Where each step ran: its pod, and the Slurm job named after the pod's UID, as Slurm records it.
-      kubectl -n "$NS" get pods -l "workflows.argoproj.io/workflow=$NAME" -o json 2>/dev/null \
-        | jq -r '.items[] | [.metadata.name, .metadata.uid, .spec.nodeName] | @tsv' >"$D/pods.tsv"
-      # Each step's output, as the virtual kubelet serves it. Not 'argo logs': it asks for timestamps,
-      # which the virtual kubelet does not give, and turns every line into a parse error.
-      while IFS=$'\t' read -r pod _ _; do
-        echo "== $pod"; kubectl -n "$NS" logs "$pod" --all-containers --prefix 2>&1
-      done <"$D/pods.tsv" >"$D/logs.txt"
-      jobs="$(hpc_jobs)"
-      while IFS=$'\t' read -r pod uid knode; do
-        j="$(printf '%s\n' "$jobs" | awk -F'|' -v u="$uid" '$1 == u {print $2 "\t" $3 "\t" $4 "\t" $5; exit}')"
-        printf 'TC%s\t%s\t%s\t%s\n' "$T" "$pod" "$knode" "${j:-no Slurm record}"
-      done <"$D/pods.tsv" | tee "$D/where.tsv" >>"$OUT/where.tsv"
-      ok=0; tot=0; : >"$D/checks.tsv"
-      while IFS=$'\t' read -r t kind what exp; do
-        case "$t" in ''|'#'*) continue;; esac
-        [ "$t" = "$T" ] || continue
-        tot=$((tot + 1))
-        case "$kind" in
-          phase)  got="$PHASE";;
-          step)   got="$(awk -F'\t' -v s="$what" '$1==s {print $2}' "$D/steps.tsv" | head -n 1)"; got="${got:-missing}";;
-          object) if body="$(mc cat "gs/$GS_BUCKET/$what" 2>/dev/null)"; then
-                    case "$body" in *"$exp"*) got="$exp";; *) got="content: $(printf '%s' "$body" | head -c 60 | tr '\n' ' ')";; esac
-                  else got="no such object"; fi;;
-          *) got="unknown check";;
-        esac
-        if [ "$got" = "$exp" ]; then r=PASS; ok=$((ok + 1)); else r=FAIL; fi
-        printf '%s\t%s\t%s\t%s\t%s\n' "$r" "$kind" "$what" "$exp" "$got" >>"$D/checks.tsv"
-      done <"$N/checks.tsv"
-      if [ "$tot" -gt 0 ] && [ "$ok" -eq "$tot" ]; then v=PASS; else v=FAIL; fi
-      line="TC$T  $v  $PHASE in $((secs / 60))m$(printf '%02d' $((secs % 60)))s, checks $ok/$tot  ($NAME)"
-      say "$line"; echo "$line" >>"$OUT/summary.txt"
-      awk -F'\t' '$1=="FAIL" {print "        failed: " $2 " " $3 " (expected " $4 ", got " $5 ")"}' "$D/checks.tsv" | tee -a "$OUT/summary.txt"
-      [ "$v" = FAIL ] && bash "$0" diag >"$D/diag.txt" 2>&1
-    done
-    n="$(($(wc -l <"$OUT/where.tsv") - 1))"
-    parts="$(awk -F'\t' 'NR > 1 && $5 != "" {print $5}' "$OUT/where.tsv" | sort -u | tr '\n' ' ')"
-    hosts="$(awk -F'\t' 'NR > 1 && $6 != "" {print $6}' "$OUT/where.tsv" | sort -u | tr '\n' ' ')"
-    line="where: $n step pods; Slurm partitions: ${parts:-none recorded}; compute nodes: ${hosts:-none recorded} ($OUT/where.tsv)"
-    say "$line"; echo "$line" >>"$OUT/summary.txt"
-    say "summary: $OUT/summary.txt  (keep the whole folder as evidence)"
+    # Submitting, waiting, recording and checking: tests/argo-native/run.py, with the checks in
+    # checks.py next to it. It calls back 'slurm-jobs' and 'diag' of this script.
+    feature=(); if [ "$IMAGE_MIRROR" = on ]; then feature=(--feature mirror); fi
+    exec python3 "$N/run.py" --out "$OUT" --namespace "$NS" --label "$LABEL" --node "$NODE" \
+      --partition "$SLURM_PARTITION" --store "gs/$GS_BUCKET" --interlink "$(il_version)" \
+      --helper "$HERE/k8s-side.sh" "${feature[@]}" "$@"
+    ;;
+  slurm-jobs:)
+    # Slurm's record of your recent jobs on the login node, name|id|partition|nodes|state (for run.py).
+    hpc_jobs
     ;;
 
   evidence:*)

@@ -2,7 +2,7 @@
 # tries to open TCP connections to the internet from inside its container, to IP addresses (so a
 # missing DNS cannot hide an open network) and to names. It writes what happened to an output
 # artifact, so every run leaves the evidence in the Global Storage. The test passes only if no
-# connection opens (checks.tsv). The container itself always succeeds, so the record is kept either way.
+# connection opens (checks.py). The container itself always succeeds, so the record is kept either way.
 # A TCP connect is the test, not an HTTP download: a download can fail on a redirect to a name the
 # node cannot resolve although the network is open (seen on the testbed).
 apiVersion: argoproj.io/v1alpha1

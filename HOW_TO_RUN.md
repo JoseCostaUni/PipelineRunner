@@ -79,7 +79,8 @@ The `Makefile` in the same folder wraps both. What it installs, and where, is li
 - **On Ulisses:**
   - your own account, with a kubeconfig that has cluster-admin (`kubectl auth can-i '*' '*'` says
     `yes`). Isabel's base cluster gives this through a ServiceAccount;
-  - access to github.com and go.dev, for `make setup`, and to ghcr.io, for the shadow image.
+  - access to github.com and go.dev, for `make setup`, and to ghcr.io, for the shadow image;
+  - `python3` 3.6 or newer, for the tests (no packages; `make check` looks for it).
 - **On Deucalion:**
   - your own account (`HPC_USER`) and a Slurm account. The account's private key must be on Ulisses
     (`SSH_KEY`). New keys can take hours to be accepted;
@@ -160,9 +161,12 @@ Each line says `PASS`, `FAIL` or `INFO`.
    - **`hpc install`:** rewrites the sidecar's configuration from the settings, and restarts it only
      if something changed.
    - **`hpc images`:** builds the images that are missing, as single files in `HPC_PROJECT_ROOT/images`.
+     With `IMAGE_MIRROR=on` there is nothing to build: the jobs pull every image from the mirror.
 
    The login node comes first, because the virtual node only becomes Ready once the plugin answers.
-3. **`tunnel on`:** interLink starts on Ulisses as three processes of yours: the SSH tunnel to the
+3. **`mirror on`,** with `IMAGE_MIRROR=on`: the image mirror in `ARGO_NAMESPACE`. It must fetch
+   Argo's executor image and `alpine:3.20` from their registries before `up` goes on.
+4. **`tunnel on`:** interLink starts on Ulisses as three processes of yours: the SSH tunnel to the
    sidecar, the interLink API and the virtual kubelet.
    - **Configuration:** it is written from the settings into `~/lisa-trial/conf`, with the reverse
      tunnel on. The logs go to `~/lisa-trial/log`.
@@ -170,12 +174,13 @@ Each line says `PASS`, `FAIL` or `INFO`.
      ConfigMap, and the Global Storage gets a Service name.
    - **The certificate:** the virtual kubelet's serving certificate request is approved.
    - **A test pod** checks that it reaches the login node's SSH port.
-4. **`artifacts`:** the Global Storage becomes Argo's default artifact repository in
+5. **`artifacts`:** the Global Storage becomes Argo's default artifact repository in
    `ARGO_NAMESPACE`, and the test data is uploaded. The repository's endpoint is the Service name
    `<GS_SERVICE>.<namespace>.svc.cluster.local`, because the tunnel maps names, not IP addresses.
-5. **`offload on`:** Argo's `workflowDefaults` send every workflow's pods to your virtual node, with
-   the Slurm account and partition and the annotation `interlink.eu/reverse-forwards`. This is what
-   keeps the test workflows plain Argo.
+6. **`offload on`:** Argo's `workflowDefaults` send every workflow's pods to your virtual node, with
+   the Slurm account and partition and the annotation `interlink.eu/reverse-forwards`. With
+   `IMAGE_MIRROR=on` also the relay's fixed address and `--exclusive` (`APPROACH.md`, section 2.3).
+   This is what keeps the test workflows plain Argo.
 
 If a step fails, `up` stops and says which one. Fix the cause and run `make up` again: every step can
 be repeated. `make status` shows each side and the processes that run.
@@ -192,7 +197,11 @@ then resets the test data in the Global Storage, so that results from an earlier
 check pass.
 
 **Each test** prints `PASS` or `FAIL`, the workflow phase, the time and the number of checks passed.
-- **The checks** (`tests/argo-native/checks.tsv`) are verified both in Argo and in the Global Storage.
+`make test` fails unless every test passed.
+- **The checks** (`tests/argo-native/checks.py`, run by `run.py` there) are verified both in Argo and
+  in the Global Storage.
+- **Every test also checks where it ran:** each step pod was on the virtual node and is a Slurm job in
+  `SLURM_PARTITION`. A step that ran on Ulisses, or that Slurm has no record of, fails the test.
 - **TC02** ends `Failed` on purpose.
 - **TC11** tries, from inside a step's container, to open connections to the internet, and passes
   only if none opens. It keeps what it tried, with the node's name, in the Global Storage
@@ -200,13 +209,15 @@ check pass.
 - **Expect each step to take longer than on the testbed,** because the queue of `normal-x86` decides
   when the job starts, and each pod waits about a minute for its tunnel.
 
-**Ctrl-C** stops the run and deletes the workflow that was running.
+**Ctrl-C** stops the run and the workflow that was running (`argo stop`). `make clean` deletes it.
 
 Everything goes to `results/<time>/`:
-- **`summary.txt`:** one line per test, and a last line with the partitions and nodes used.
+- **`summary.txt`:** one line per test, how many passed, and a last line with the partitions and
+  nodes used.
 - **`config/`:** both sides' configuration as the run started.
 - **`TC<nn>/`, for each test:**
-  - `workflow.json` and `pods.tsv`;
+  - `workflow.json`, `steps.tsv` and `pods.tsv`;
+  - `checks.tsv`: every check, `PASS` or `FAIL`, with what it expected and what it got;
   - `logs.txt`: every container's own output. Each of `init`, `main` and `wait` starts with
     `interLink: reverse tunnel ready after <n>s`;
   - `where.tsv`: for every step pod, the Slurm job it became, its partition, the compute node and its
@@ -262,7 +273,9 @@ Some things stay until you delete them:
 | A pod stays `Pending` | `make diag`: the shadow pod waits for the job to start, then reaches it with `srun --overlap`. An `srun` error there means the site refuses it. `squeue -u $USER` on the login node shows the queue. |
 | `init` fails | `job.out` in the job folder must say `reverse tunnel ready`. If it does, check the Global Storage Service: `kubectl -n <ARGO_NAMESPACE> get svc,endpointslice -l app.kubernetes.io/managed-by=deucalion-trial`. |
 | `main` finds a folder where it expects a file | The subPath fix did not run. `subpath-fix.log` in the job folder lists the binds it rewrote, and `SbatchPath` in `SlurmConfig.yaml` must point to it. |
-| "image not found" | The pod names an image that is not in `IMAGES`. Add it, run `make sync`, then `./k8s-side.sh hpc images`. No restart is needed. |
+| "image not found" | `IMAGE_MIRROR=off`: the pod names an image that is not in `IMAGES`. Add it, run `make sync`, then `./k8s-side.sh hpc images`. No restart is needed. Or switch the mirror on. |
+| `IMAGE_MIRROR=on`: a pull fails in `job.out` | `kubectl -n <ARGO_NAMESPACE> logs deploy/image-mirror` shows whether the mirror reached the registry. A `mksquashfs` or thread error means the compute node's process limit is below its CPU count (`make check`, the probe's `processes` line). |
+| `IMAGE_MIRROR=on`: a relay says the address is in use | Another relay holds it on that node: a pod sharing the node (check that the Slurm flags in `workflowDefaults` have `--exclusive`), or the relay of a job that just ended, when Slurm does not end it with the job (`make check`: `ProctrackType`). Use `IMAGE_MIRROR=off` there. |
 | `sbatch` is refused | The partition or account in `deucalion.env`. Check them with `sinfo -s` on the login node. |
 | `make setup` cannot build interLink 0.6.3 | Ulisses needs to reach github.com and go.dev. Otherwise, build it elsewhere: `GOOS=linux GOARCH=amd64 go build ./cmd/interlink ./cmd/virtual-kubelet` at tag 0.6.3. Copy both binaries to `~/lisa-trial/interlink-0.6.3/` as `interlink` and `virtual-kubelet`. |
 | `tunnel on` says a pod does not reach the login node's sshd | The pod network on Ulisses cannot reach port 22 of `HPC_LOGIN_HOST`, although Ulisses itself can. Look at outgoing NAT for pods (Calico) and any firewall on Ulisses. |

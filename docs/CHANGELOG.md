@@ -12,6 +12,146 @@ three Lima VMs. Since 24 Nov 2026 `main` has only `reverse`; entries below that 
 
 ---
 
+## 2026-11-24 (late night): any image, through an image mirror in the cluster; the diagrams
+
+**Problem.** The biggest limit left (APPROACH.md, section 5): compute nodes cannot pull images, so
+every image a pod names had to be listed in `IMAGES` and built beforehand on the login node. A
+workflow could not name any image it likes.
+
+**Options considered.**
+- **Pull on demand on the login node,** from our `sbatch` wrapper. Rejected: it grows the one wrapper
+  we want to remove. This belongs in the plugin: a pull at submission with an image cache and a pull
+  policy, the job held (`sbatch --hold`) until the pull ends. Proposed in NEXT_STEPS.md.
+- **Pull through the tunnel,** from a mirror in the cluster. Chosen: it needs no change to interLink
+  or the plugin, only their configuration.
+
+**What we found first.** interLink resolves the tunnel's names only inside the containers (it binds a
+hosts file into them). Singularity pulls a `docker://` image before the container exists, in the
+job's shell, where those names do not resolve. The relay's address is derived per pod from its UID
+(`reverseBindAddress` in interLink's `shadow_ssh_reverse.go`), so it is not known in advance either.
+interLink's annotation `interlink.eu/reverse-bind` fixes it; the plugin's `ImagePrefix` (or the
+per-pod annotation `slurm-job.vk.io/image-root`) then names the mirror as `docker://<address>:5000/`.
+The tunnel is ready before Singularity starts: the job's pre-exec waits for it.
+
+**First design, then changed.** The first version had each workflow opt in with three pod
+annotations (run `20261124-214141`). As the user pointed out, that defeats the purpose: the scientist
+would have to change the workflow. So it became platform configuration:
+- **The plugin** (`hpc-side.sh install`): `ImagePrefix: docker://127.77.0.1:5000/` and `--no-https`.
+- **Argo's `workflowDefaults`** (`offload on`): every pod's relay at `127.77.0.1`, and `--exclusive`
+  in the Slurm flags, so that two pods never share a node and its address.
+- **The mirror:** zot (`deploy/deucalion/image-mirror.yaml`), started by `make up`. One rule per
+  registry (`quay.io/…`, `ghcr.io/…`, `docker.io/…`), and a last one for bare names, which go to Docker
+  Hub as Kubernetes reads them (`alpine:3.20` is `library/alpine`). So workflows keep their image names.
+- **Setting:** `IMAGE_MIRROR=on|off` (default `off`; `on` in `deucalion.env.example`). With `on`,
+  `hpc images` builds nothing. `make mirror` / `make mirror-off`; `make restore` leaves the mirror.
+- **TC12:** a plain workflow naming `busybox:1.37`, which nobody built. `make test` (all) skips it
+  without the mirror (`checks.NEEDS`, `run.py --feature`).
+- **Checks:** `mirror on` must fetch Argo's executor image and `alpine:3.20`; `make check` looks for
+  `--no-https`, shows the partition's `OverSubscribe`, and the compute-node probe shows the CPUs and
+  the process limit in a job (Singularity's `mksquashfs` may start one thread per CPU).
+
+**What the testbed showed.** With the mirror as default (`20261124-215423`), TC00 and TC12 passed
+with the image caches emptied first: the mirror served `alpine` and `busybox` from Docker Hub and the
+executor from quay.io, and the jobs converted them (`Creating SIF file`). TC05 failed: one of its
+three steps found `127.77.0.1:9000` taken. `--exclusive` worked (Slurm ran the three jobs one after
+the other), but the step started on the node right after the previous job ended, and that job's relay
+was still there. The testbed's Slurm tracks processes with `proctrack/linuxproc`, which loses the
+relay: the job starts it in the background, and it is reparented when the job's shell ends.
+`proctrack/cgroup` ends everything in the job's cgroup. So `make check` now fails with the mirror on
+unless `ProctrackType` is `proctrack/cgroup`, and the testbed keeps `IMAGE_MIRROR=off`.
+
+**Costs.**
+- Every pod asks for a whole node. Deucalion's parallel steps already landed on separate nodes
+  (`20261124-011219-reverse`: TC05 on `cnx043`, `cnx427`, `cnx497` at once), which suggests whole
+  nodes anyway, but this is not confirmed (`make check` shows `OverSubscribe`).
+- It depends on Slurm's process tracking (above). Deucalion's is not known yet.
+- Each new image is converted on the compute node, inside the job, once (`$HOME/.singularity`).
+- The mirror keeps its images in an `emptyDir`; Docker Hub limits anonymous pulls, and the mirror
+  fetches each image only once.
+- Not yet run on Deucalion.
+
+**What would remove the fixed address** (and `--exclusive` and the process-tracking requirement):
+interLink setting the image prefix to each pod's own relay address, which it already computes. A
+small change in the virtual kubelet; to propose (NEXT_STEPS.md).
+
+**Evidence.**
+- `20261124-212245`: TC12 by hand (opt-in annotations), the mirror applied by hand: relay at
+  `127.77.0.1`, `Creating SIF file`, the mirror's log serving the executor and `busybox`.
+- `20261124-214141`: `make test TESTS="00 05 12"`, the mirror started by `make up`, opt-in TC12: 3/3.
+- `20261124-215423`: the mirror as default: TC00 and TC12 pass, TC05 fails as described.
+- `20261125-010233`: `IMAGE_MIRROR=off` again (images built beforehand): TC00 passes, so the default
+  path is unchanged. An earlier attempt (`20261124-220655`) failed while the Mac slept: the VMs' clocks
+  jumped (`Clock change detected` at 22:25 and 22:40, Munge's `Expired credential`), and `init`
+  failed (status 64). Not a fault of the change; worth knowing for long testbed runs.
+
+**Also in this change.**
+- **`docs/diagrams/`:** four diagrams in the style of Isabel's deployment views (her Fig. 6.1, 6.2):
+  deployment, submission (numbered), communication (the tunnel and interLink's calls), images. Drawn
+  by `diagrams.py` (standard library), with a PDF of each for LaTeX.
+- **`run.py`:** a command whose output is not JSON no longer stops the run (found with stand-in
+  commands).
+
+---
+
+## 2026-11-24 (night): the tests are run and checked in Python, and check where each step ran
+
+**Decision.** The loop that submits the test workflows, records them and checks their results moves
+from `k8s-side.sh` to Python: `tests/argo-native/run.py`, with the checks in
+`tests/argo-native/checks.py` instead of `checks.tsv`. The tests themselves stay plain Argo
+workflows.
+- **Why:**
+  - The loop was about 65 lines of bash that parsed JSON with `jq` and TSV with `awk`. A bug of
+    that kind had already slipped into a run's summary: in `20261124-014246-reverse` the columns were
+    shifted ("Slurm partitions: cn; compute nodes: COMPLETED").
+  - A check could only be one of three fixed kinds, read from a table. In Python a check is a
+    function of the test's result, so it can look at anything the run recorded.
+  - It also takes about 50 lines out of `k8s-side.sh`, which the cleanup of the scripts asks for
+    (NEXT_STEPS.md).
+- **Why the standard library only, and not pytest:** Ulisses has `python3` but we cannot install
+  packages system-wide, and the run must keep working with nothing but `make test`. `run.py` and
+  `checks.py` need Python 3.6 or newer, and `argo`, `kubectl` and `mc` do the talking, as before.
+- **Why bash still starts it:** the checks before a run (both sides up, the artifact repository,
+  offload with the tunnel), `reset-data` and the configuration snapshot use the script's own
+  functions and settings. `test` does those, then hands over with `exec python3 run.py`. `run.py`
+  calls back two commands of the script: `slurm-jobs` (Slurm's record, over SSH to the login node)
+  and `diag`.
+
+**What changed:**
+- **A new check in every test** (`EVERY_TEST`): each step pod was on the virtual node, and Slurm has
+  a job for it in `SLURM_PARTITION`. Before, `where.tsv` only recorded this. Now a test fails if a
+  step ran on Ulisses, or if Argo says `Succeeded` but Slurm never ran the job. TC00 has 3 checks
+  instead of 2, and so on.
+- **`make test` fails unless every test passed.** Before, it always ended with status 0.
+- **A test without checks of its own fails**, as before; so does a missing workflow file or a failed
+  submission, which before were skipped without a line in the summary.
+- **Ctrl-C** stops the workflow that was running (`argo stop`) and exits with 130. Before, it was
+  left running until `make clean`.
+- **`summary.txt`** gets a line `passed: <n> of <m> tests` before the `where:` line, which stays
+  last. Every other file of a run keeps its name and format, so `make evidence` is unchanged.
+- **`make check`** looks for `python3` on Ulisses.
+
+**Costs.**
+- Two languages on Ulisses instead of one. The login node still has no Python, so `hpc-side.sh`
+  stays bash.
+- `run.py` is 212 lines and `checks.py` 104, against about 65 lines of bash and a 37-line table.
+  Most of the difference is comments and the new check.
+- The new where check depends on `squeue`/`sacct` answering over SSH right after the workflow ends.
+  It did in every testbed run since `where.tsv` exists (`20261124-014246-reverse` on), and Deucalion
+  keeps accounting (`sacct` works there). A site without accounting would fail it once `squeue`
+  forgets the job.
+
+**Evidence.**
+- Offline, with stand-in `argo`, `kubectl` and `mc` commands: a passing test, a failed object check,
+  a pod off the virtual node, a pod in another partition, a missing workflow file, the exit status,
+  and Ctrl-C (workflow stopped, status 130).
+- Testbed, as the trial user, run `20261124-204746` (root `make test TESTS="00 02 11"`): TC00 3/3,
+  TC02 4/4 (ends `Failed` on purpose; its failing step is Slurm job 479, `FAILED`, and still passes
+  the where check), TC11 3/3, `passed: 3 of 3 tests`, `make` exit status 0. Four step pods, Slurm
+  jobs 478 to 481 on partition `arm`, node `cn`. Then `make check` (`found python3`), `make evidence`
+  on that run, and `make restore`.
+
+---
+
 ## 2026-11-24 (evening): `main` keeps only interLink 0.6.3 and the reverse tunnel; two tags
 
 **Decision.** We go with interLink 0.6.3 and its reverse tunnel. It is the only approach left on

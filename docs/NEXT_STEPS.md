@@ -17,7 +17,12 @@ interLink 0.6.3 with the reverse tunnel only (tag `reverse-interlink-0.6.3`). Re
   - `where.tsv` per run;
   - TC11 (no internet from inside a step);
   - `make evidence`;
-  - the `main` cleanup.
+  - the `main` cleanup;
+  - the tests' runner and checks in Python (`tests/argo-native/run.py`, `checks.py`), with a new check
+    in every test that each step pod is a Slurm job in the partition;
+  - the image mirror (`IMAGE_MIRROR=on`): any image, pulled in the job from a mirror in the cluster
+    through the tunnel, with no change to the workflows (TC12);
+  - the diagrams (`docs/diagrams/`).
 
   The last testbed runs passed: `20261124-172438`, with the in-cluster MinIO, and the root
   `make init` / `make test`.
@@ -59,6 +64,11 @@ Ulisses. `make restore` switches everything off; `make minio-off` also removes t
    - container logs: "reverse tunnel ready" in every container, and "main on cnx…";
    - `where.tsv`;
    - TC11 on a real offline node;
+   - the Python runner, and its check that every step is a Slurm job in `normal-x86`;
+   - the image mirror: add `IMAGE_MIRROR=on` to `deucalion.env`, `make sync`, then `make check`. It
+     must pass `ProctrackType proctrack/cgroup` (otherwise a finished job's relay can hold the fixed
+     address, as on the testbed: keep `IMAGE_MIRROR=off`) and `--no-https`; look at the partition's
+     `OverSubscribe` and the probe's `processes` line. Then `make up`, `make test T=12`, then all;
    - an evidence bundle made by the scripts on `main`.
 
    Copy it to `~/Documents/Dissertation/evidence/deucalion/`.
@@ -73,17 +83,25 @@ Ulisses. `make restore` switches everything off; `make minio-off` also removes t
 
    Argo can't be configured around it: the controller hard-codes the `subPath` mount of input
    artifacts.
-4. **Report the plugin's DeletePod panic upstream,** or build from the tag. The 0.6.3 release binary
+4. **Propose the per-pod image prefix to interLink.** With the image mirror, every pod's relay takes
+   one fixed address, so each pod asks for a whole node (`--exclusive`). interLink already derives a
+   relay address per pod from its UID (`reverseBindAddress`), and the testbed showed a second cost: on
+   `proctrack/linuxproc` a finished job's relay held the address for the next job. A small change in the virtual kubelet,
+   e.g. an annotation `interlink.eu/reverse-image-mirror: host:port`, could add the forward and set
+   `slurm-job.vk.io/image-root` to `docker://<that pod's address>:<port>/`. That removes the fixed
+   address and `--exclusive`. The alternative, in the plugin: pull on the login node at submission
+   (`ImageCacheDir`, a pull policy, `sbatch --hold` until the pull ends).
+5. **Report the plugin's DeletePod panic upstream,** or build from the tag. The 0.6.3 release binary
    panics on every pod deletion (a nil `*JidStruct`), which the tag's source already guards. The binary
    doesn't match its tag, and an empty job folder is left per pod.
-5. **Measure what the thesis needs:**
+6. **Measure what the thesis needs:**
    - **Tunnel start-up:** 68 to 84 s per pod on the testbed. Measure it on Deucalion from
      `logs.txt`, and split it from the queue wait with `where.tsv`/`sacct`.
    - **Throughput of the `srun` carrier** with large artifacts (100 MB, 1 GB), not measured yet: a new
      test like TC03 with a bigger file.
    - **Parallel pods against the 150-process limit:** each running pod holds an SSH session and an
      `srun` on the login node. TC05's three parallel steps worked. Find where it breaks.
-6. **A message bus through the tunnel** (offered, not built). Deploy NATS in `ARGO_NAMESPACE` and set
+7. **A message bus through the tunnel** (offered, not built). Deploy NATS in `ARGO_NAMESPACE` and set
    `EXTRA_FORWARDS="nats.<namespace>.svc.cluster.local:4222"`. Then a test where `main` publishes
    during execution. This is the capability the split executor could not give.
 
@@ -114,9 +132,13 @@ Ulisses. `make restore` switches everything off; `make minio-off` also removes t
   identity question.
 - **The certificate request of the virtual kubelet.** We approve it ourselves (`approve_csr`). Check
   whether Ulisses gets an approver, which would make this step unnecessary.
-- **Scripts.** `k8s-side.sh` is still 930 lines. Split it by concern (install, tunnel, artifacts and
-  offload, test, evidence), keeping the Makefile targets. Rehearse on the testbed after (`make init`,
+- **Scripts.** `k8s-side.sh` is still 884 lines; the test loop has moved to Python
+  (`tests/argo-native/run.py`). Split the rest by concern (install, tunnel, artifacts and offload,
+  evidence), keeping the Makefile targets. `evidence` is the next candidate for Python. Rehearse on the testbed after (`make init`,
   `make test`, `make trial T=restore`).
+- **Tests in parallel.** `run.py` runs them one after the other. They write to different keys, so a
+  thread per test would work, but each running pod holds an SSH session and an `srun` on the login
+  node (the 150-process limit): cap the number at once.
 - **ARM partitions** were not tried. Images are built on the x86 login nodes. An ARM run needs ARM
   images built elsewhere, and the plugin's arm64 binary.
 - **Housekeeping on Deucalion:**

@@ -12,6 +12,7 @@
 #   make status | diag | clean | down
 #   make restore          clean, down, the sidecar stopped, the virtual node deleted
 #   make minio, minio-off with GS_ENDPOINT=cluster: a MinIO in the cluster as the Global Storage
+#   make mirror, mirror-off with IMAGE_MIRROR=on: the image mirror in the cluster ('make up' starts it)
 #   make results          results.tgz in your home folder, to copy to the Mac
 #   make login            a shell on the login node, in this folder
 # Every target calls k8s-side.sh, which runs hpc-side.sh on the login node when needed.
@@ -20,7 +21,7 @@ SHELL := /bin/bash
 ENV_FILE ?= deucalion.env
 K := TRIAL_ENV=$(abspath $(ENV_FILE)) ./k8s-side.sh
 
-.PHONY: env setup sync check up down test status diag clean restore results login minio minio-off evidence
+.PHONY: env setup sync check up down test status diag clean restore results login minio minio-off mirror mirror-off evidence
 
 env:
 	[ -f $(ENV_FILE) ] || { cp deucalion.env.example $(ENV_FILE) && chmod 600 $(ENV_FILE); }
@@ -67,3 +68,9 @@ minio:
 
 minio-off:
 	$(K) minio off
+
+mirror:
+	$(K) mirror on
+
+mirror-off:
+	$(K) mirror off

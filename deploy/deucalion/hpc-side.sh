@@ -40,6 +40,11 @@ RT="$HPC_PROJECT_ROOT/reverse-tunnel"      # the subPath fix, the capacity scrip
 SOCK="$RT/sock"                            # the plugin's SocketDirRoot, shared with the compute nodes
 RES="$RT/resources.sh"
 IMG="$HPC_PROJECT_ROOT/images"
+# IMAGE_MIRROR=on: every image comes from the image mirror in the cluster, pulled in the job through
+# the pod's tunnel at the relay address MIRROR_BIND, which k8s-side.sh gives every pod (offload).
+IMAGE_MIRROR="${IMAGE_MIRROR:-off}"
+MIRROR_BIND="${MIRROR_BIND:-127.77.0.1}"
+if [ "$IMAGE_MIRROR" = on ]; then IMAGE_ROOT="docker://$MIRROR_BIND:5000/"; else IMAGE_ROOT="$IMG/"; fi
 case "$(uname -m)" in aarch64|arm64) ARCH=arm64;; *) ARCH=x86_64;; esac
 PLUGIN="$IL/interlink-sidecar-slurm-${IL_VERSION}_Linux_$ARCH"
 PLUGIN_URL="https://github.com/interlink-hq/interlink-slurm-plugin/releases/download/$IL_VERSION/interlink-sidecar-slurm_Linux_$ARCH"
@@ -67,7 +72,9 @@ gs_url() { if [ "${GS_INSECURE:-true}" = true ]; then echo "http://$GS_ENDPOINT"
 #   SbatchPath          the subPath fix, the one wrapper left (../../setup/hpc/subpath-fix/README.md)
 #   --no-eval           Apptainer would evaluate every env value a second time and corrupt ARGO_TEMPLATE
 #   --contain           each container gets its own /tmp, as in Kubernetes
-#   ImagePrefix         the images pulled beforehand ('images'): compute nodes cannot pull
+#   ImagePrefix         the images built beforehand ('images'), as compute nodes cannot pull; with
+#                       IMAGE_MIRROR=on the image mirror instead, through the tunnel, over plain HTTP
+#                       (--no-https): the job's Singularity pulls each image as the pod names it
 #   SocketDirRoot       where each job's tunnel sockets live (shared with the compute nodes)
 #   ResourceScriptPath  a fixed capacity: plugin 0.6.3 reports the free memory it sees, which fell below
 #                       one pod's request on the testbed and left pods Pending
@@ -80,12 +87,13 @@ ScancelPath: "$(command -v scancel)"
 SqueuePath: "$(command -v squeue)"
 SinfoPath: "$(command -v sinfo)"
 CommandPrefix: ""
-ImagePrefix: "$IMG/"
+ImagePrefix: "$IMAGE_ROOT"
 SingularityPath: "singularity"
 SingularityPrefix: ""
 SingularityDefaultOptions:
   - "--no-eval"
   - "--contain"
+$(if [ "$IMAGE_MIRROR" = on ]; then echo '  - "--no-https"'; fi)
 ExportPodData: true
 DataRootFolder: "$IL/jobs/"
 Namespace: "vk"
@@ -150,12 +158,25 @@ case "${1:-}" in
     help="$(singularity exec --help 2>&1 || true)"
     case "$help" in *--no-eval*) pass "singularity exec has --no-eval";; *) fail "singularity exec has no --no-eval (needs Apptainer >= 1.1 or a SingularityCE that has it)";; esac
     case "$help" in *--contain*) pass "singularity exec has --contain";; *) fail "singularity exec has no --contain";; esac
+    if [ "${IMAGE_MIRROR:-off}" = on ]; then
+      case "$help" in *--no-https*) pass "singularity exec has --no-https (the image mirror speaks HTTP)";;
+        *) fail "singularity exec has no --no-https: the image mirror (IMAGE_MIRROR=on) cannot be used";; esac
+    fi
     for t in bash sed awk grep curl sbatch squeue scancel sinfo srun; do
       command -v "$t" >/dev/null 2>&1 && pass "found $t" || fail "missing $t"
     done
     command -v mksquashfs >/dev/null 2>&1 && pass "found mksquashfs (images are packed with it)" \
       || info "no mksquashfs: 'images' falls back to singularity pull"
     if sinfo -h -p "$SLURM_PARTITION" -o '%P' 2>/dev/null | grep -q .; then pass "partition $SLURM_PARTITION exists"
+      info "partition $SLURM_PARTITION: $(scontrol show partition "$SLURM_PARTITION" 2>/dev/null | grep -o -E '(OverSubscribe|ExclusiveUser)=[^ ]*' | tr '\n' ' ')(with IMAGE_MIRROR=on every pod asks for a whole node, --exclusive)"
+      # With the image mirror every pod's relay takes the same address. Slurm must end a job's relay
+      # with the job, or the next job on that node finds the address taken: proctrack/cgroup does,
+      # proctrack/linuxproc loses the relay, which the job starts in the background (seen on the testbed).
+      pt="$(scontrol show config 2>/dev/null | sed -n 's/^ProctrackType *= *//p')"
+      if [ "${IMAGE_MIRROR:-off}" = on ]; then
+        case "$pt" in proctrack/cgroup) pass "ProctrackType $pt: a job's relay ends with the job (the image mirror's fixed address)";;
+          *) fail "ProctrackType ${pt:-unknown}: a finished job's relay can outlive it and hold the image mirror's fixed address; use IMAGE_MIRROR=off here";; esac
+      else info "ProctrackType ${pt:-unknown}"; fi
     else fail "partition $SLURM_PARTITION not found; partitions: $(sinfo -h -o '%P' | tr '\n' ' ')"; fi
     squeue -h --me -o %i >/dev/null 2>&1 && pass "squeue --me works (the shadow finds the job with it)" \
       || fail "squeue --me fails (the shadow finds the job with it; Slurm older than 20.11?)"
@@ -180,6 +201,8 @@ case "${1:-}" in
       [ -d '$HPC_PROJECT_ROOT' ] && echo 'shared FS: $HPC_PROJECT_ROOT visible' || echo 'shared FS: NOT visible'
       p=\$(command -v python3) && echo \"python3: \$p, \$(python3 --version 2>&1)\" || echo 'python3: NOT found'
       [ -x /usr/sbin/sshd ] && echo 'sshd: /usr/sbin/sshd' || echo 'sshd: NOT found at /usr/sbin/sshd'
+      cg=\$(sed -n 's/^0:://p' /proc/self/cgroup)
+      echo \"CPUs: \$(nproc) for the job, \$(getconf _NPROCESSORS_ONLN) on the node; processes: ulimit -u \$(ulimit -u), cgroup pids.max \$(cat /sys/fs/cgroup\$cg/pids.max 2>/dev/null || echo unknown)\"
       echo 'probe: done'
       sleep 90
     ")" || { say "ERROR: sbatch failed: $jid"; exit 1; }
@@ -200,6 +223,8 @@ case "${1:-}" in
     say "srun --overlap into the job: $ov"
     say "Expected on an air-gapped node: every URL 'none' or 000, the shared FS visible."
     say "The reverse tunnel also needs python3 (3.6 or newer), /usr/sbin/sshd and srun --overlap working."
+    say "With the image mirror, Singularity converts each new image in the job: its mksquashfs may start"
+    say "one thread per CPU of the node, so the process limit above must allow that (on the login node it does not)."
     ;;
 
   install)
@@ -245,6 +270,7 @@ case "${1:-}" in
     ;;
 
   images)
+    if [ "$IMAGE_MIRROR" = on ]; then say "IMAGE_MIRROR=on: the jobs pull every image from the image mirror; nothing to build here"; exit 0; fi
     mkdir -p "$IMG"
     # Each image is unpacked in the login node's local /tmp and packed into one squashfs file, which
     # singularity runs like a SIF. 'singularity pull' fails on Deucalion: its mksquashfs starts one

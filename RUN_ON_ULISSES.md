@@ -48,7 +48,9 @@ cd deploy/deucalion
 make env && vi deucalion.env      # HPC_PROJECT_ROOT, GS_ENDPOINT, GS_ACCESS_KEY, GS_SECRET_KEY; check the rest
 ```
 
-A `deucalion.env` from before 24 Nov still works: the split settings in it are ignored.
+A `deucalion.env` from before 24 Nov still works: the split settings in it are ignored. For the image
+mirror (any image, nothing built on the login node), add `IMAGE_MIRROR=on` to it; without it, images
+are built beforehand as before.
 
 ## 3. Set up and check (once)
 

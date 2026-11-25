@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1290" height="560" viewBox="0 0 1290 560" font-family="Helvetica, Arial, sans-serif">
+<defs><marker id="arrow-control" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3a3f47"/></marker><marker id="arrow-control-s" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3a3f47"/></marker><marker id="arrow-tunnel" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8a5cc0"/></marker><marker id="arrow-tunnel-s" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8a5cc0"/></marker><marker id="arrow-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0504d"/></marker><marker id="arrow-data-s" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0504d"/></marker><marker id="arrow-image" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#e07b1f"/></marker><marker id="arrow-image-s" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#e07b1f"/></marker><marker id="arrow-ssh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3a3f47"/></marker><marker id="arrow-ssh-s" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3a3f47"/></marker></defs>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="25.0" y="36.0" font-size="13" font-weight="bold" font-style="normal" text-anchor="start" fill="#1f2329">1  IMAGE_MIRROR=off: images built beforehand on the login node (only those in IMAGES)</text>
+<rect x="25" y="60" width="190" height="54" rx="6" fill="#eef1f5" stroke="#8d98a6" stroke-width="1.2"/>
+<text x="120.0" y="85.0" font-size="12" font-weight="bold" font-style="normal" text-anchor="middle" fill="#2b2f36">Public registries</text>
+<text x="120.0" y="101.7" font-size="10" font-weight="normal" font-style="normal" text-anchor="middle" fill="#2b2f36">Docker Hub, quay.io, ghcr.io</text>
+<rect x="265" y="55" width="270" height="64" rx="6" fill="#d3ecc6" stroke="#86c472" stroke-width="1.2"/>
+<text x="400.0" y="78.7" font-size="12" font-weight="bold" font-style="normal" text-anchor="middle" fill="#24481a">Login node: 'make up' (hpc images)</text>
+<text x="400.0" y="95.4" font-size="10" font-weight="normal" font-style="normal" text-anchor="middle" fill="#24481a">singularity build --sandbox, then</text>
+<text x="400.0" y="107.9" font-size="10" font-weight="normal" font-style="normal" text-anchor="middle" fill="#24481a">mksquashfs -processors 4 (150-process limit)</text>
+<rect x="585" y="60" width="250" height="54" rx="6" fill="#f8d9d9" stroke="#e09898" stroke-width="1.2"/>
+<text x="710.0" y="85.0" font-size="12" font-weight="bold" font-style="normal" text-anchor="middle" fill="#6b2222">Shared file system</text>
+<text x="710.0" y="101.7" font-size="10" font-weight="normal" font-style="normal" text-anchor="middle" fill="#6b2222">images/alpine:3.20, images/quay.io/…</text>
+<rect x="885" y="55" width="380" height="64" rx="6" fill="#d3ecc6" stroke="#86c472" stroke-width="1.2"/>
+<text x="1075.0" y="78.7" font-size="12" font-weight="bold" font-style="normal" text-anchor="middle" fill="#24481a">Slurm job</text>
+<text x="1075.0" y="95.4" font-size="10" font-weight="normal" font-style="normal" text-anchor="middle" fill="#24481a">singularity exec … /…/images/alpine:3.20</text>
+<text x="1075.0" y="107.9" font-size="10" font-weight="normal" font-style="normal" text-anchor="middle" fill="#24481a">(ImagePrefix: a local path)</text>
+<path d="M 215.0 87.0 L 265.0 87.0" fill="none" stroke="#e07b1f" stroke-width="1.4" stroke-dasharray="6,4" marker-end="url(#arrow-image)"/>
+<path d="M 535.0 87.0 L 585.0 87.0" fill="none" stroke="#e07b1f" stroke-width="1.4" stroke-dasharray="6,4" marker-end="url(#arrow-image)"/>
+<path d="M 835.0 87.0 L 885.0 87.0" fill="none" stroke="#e07b1f" stroke-width="1.4" stroke-dasharray="6,4" marker-end="url(#arrow-image)"/>
+<text x="25.0" y="168.0" font-size="13" font-weight="bold" font-style="normal" text-anchor="start" fill="#1f2329">2  IMAGE_MIRROR=on: any image, pulled while the job runs; the workflow does not change</text>
+<rect x="25" y="190" width="330" height="114" rx="6" fill="#fdefc6" stroke="#e3c25e" stroke-width="1.2"/>
+<text x="190.0" y="211.8" font-size="12" font-weight="bold" font-style="normal" text-anchor="middle" fill="#5c4610">Platform defaults (make up)</text>
+<text x="190.0" y="229.1" font-size="10.5" font-weight="normal" font-style="normal" text-anchor="middle" fill="#5c4610">Argo workflowDefaults, every pod:</text>
+<text x="190.0" y="242.3" font-size="10.5" font-weight="normal" font-style="normal" text-anchor="middle" fill="#5c4610">interlink.eu/reverse-bind: 127.77.0.1</text>
+<text x="190.0" y="255.4" font-size="10.5" font-weight="normal" font-style="normal" text-anchor="middle" fill="#5c4610">Slurm flags: … --exclusive</text>
+<text x="190.0" y="268.5" font-size="10.5" font-weight="normal" font-style="normal" text-anchor="middle" fill="#5c4610">Plugin (SlurmConfig.yaml):</text>
+<text x="190.0" y="281.6" font-size="10.5" font-weight="normal" font-style="normal" text-anchor="middle" fill="#5c4610">ImagePrefix: docker://127.77.0.1:5000/</text>
+<text x="190.0" y="294.8" font-size="10.5" font-weight="normal" font-style="normal" text-anchor="middle" fill="#5c4610">SingularityDefaultOptions: … --no-https</text>
+<rect x="405" y="205" width="330" height="84" rx="6" fill="#e8ddf1" stroke="#a88ac8" stroke-width="1.2"/>
+<text x="570.0" y="231.5" font-size="12" font-weight="bold" font-style="normal" text-anchor="middle" fill="#3f2a5c">The plugin writes into job.sh</text>
+<text x="570.0" y="248.8" font-size="10.5" font-weight="normal" font-style="normal" text-anchor="middle" fill="#3f2a5c">singularity exec --no-https</text>
+<text x="570.0" y="262.0" font-size="10.5" font-weight="normal" font-style="normal" text-anchor="middle" fill="#3f2a5c">docker://127.77.0.1:5000/busybox:1.37</text>
+<text x="570.0" y="275.1" font-size="10.5" font-weight="normal" font-style="normal" text-anchor="middle" fill="#3f2a5c">(the image as the pod names it)</text>
+<rect x="785" y="205" width="230" height="84" rx="6" fill="#d3ecc6" stroke="#86c472" stroke-width="1.2"/>
+<text x="900.0" y="232.4" font-size="12" font-weight="bold" font-style="normal" text-anchor="middle" fill="#24481a">Singularity in the job</text>
+<text x="900.0" y="249.1" font-size="10" font-weight="normal" font-style="normal" text-anchor="middle" fill="#24481a">pulls, converts to SIF once,</text>
+<text x="900.0" y="261.6" font-size="10" font-weight="normal" font-style="normal" text-anchor="middle" fill="#24481a">keeps it in $HOME/.singularity</text>
+<text x="900.0" y="274.1" font-size="10" font-weight="normal" font-style="normal" text-anchor="middle" fill="#24481a">(the shared home)</text>
+<rect x="1065" y="205" width="200" height="84" rx="6" fill="#e8ddf1" stroke="#a88ac8" stroke-width="1.2"/>
+<text x="1165.0" y="232.4" font-size="12" font-weight="bold" font-style="normal" text-anchor="middle" fill="#3f2a5c">Relay 127.77.0.1:5000</text>
+<text x="1165.0" y="249.1" font-size="10" font-weight="normal" font-style="normal" text-anchor="middle" fill="#3f2a5c">the same address in every</text>
+<text x="1165.0" y="261.6" font-size="10" font-weight="normal" font-style="normal" text-anchor="middle" fill="#3f2a5c">pod: Singularity pulls outside</text>
+<text x="1165.0" y="274.1" font-size="10" font-weight="normal" font-style="normal" text-anchor="middle" fill="#3f2a5c">the container, no names</text>
+<path d="M 355.0 247.0 L 405.0 247.0" fill="none" stroke="#3a3f47" stroke-width="1.4" marker-end="url(#arrow-control)"/>
+<path d="M 735.0 247.0 L 785.0 247.0" fill="none" stroke="#3a3f47" stroke-width="1.4" marker-end="url(#arrow-control)"/>
+<path d="M 1065.0 247.0 L 1015.0 247.0" fill="none" stroke="#e07b1f" stroke-width="1.4" stroke-dasharray="6,4" marker-end="url(#arrow-image)"/>
+<rect x="1065" y="345" width="200" height="54" rx="6" fill="#e8ddf1" stroke="#a88ac8" stroke-width="1.2"/>
+<text x="1165.0" y="369.9" font-size="12" font-weight="bold" font-style="normal" text-anchor="middle" fill="#3f2a5c">Reverse tunnel</text>
+<text x="1165.0" y="386.6" font-size="10" font-weight="normal" font-style="normal" text-anchor="middle" fill="#3f2a5c">sshd → srun → shadow</text>
+<rect x="785" y="345" width="230" height="54" rx="6" fill="#ffe2c4" stroke="#ef9f55" stroke-width="1.2"/>
+<text x="900.0" y="363.7" font-size="12" font-weight="bold" font-style="normal" text-anchor="middle" fill="#6b3a0c">Image mirror (zot)</text>
+<text x="900.0" y="380.4" font-size="10" font-weight="normal" font-style="normal" text-anchor="middle" fill="#6b3a0c">image-mirror.&lt;ns&gt;.svc:5000,</text>
+<text x="900.0" y="392.9" font-size="10" font-weight="normal" font-style="normal" text-anchor="middle" fill="#6b3a0c">fetches each image once</text>
+<rect x="405" y="345" width="330" height="54" rx="6" fill="#eef1f5" stroke="#8d98a6" stroke-width="1.2"/>
+<text x="570.0" y="363.7" font-size="12" font-weight="bold" font-style="normal" text-anchor="middle" fill="#2b2f36">Public registries, on demand</text>
+<text x="570.0" y="380.4" font-size="10" font-weight="normal" font-style="normal" text-anchor="middle" fill="#2b2f36">quay.io/… → quay.io, ghcr.io/… → ghcr.io,</text>
+<text x="570.0" y="392.9" font-size="10" font-weight="normal" font-style="normal" text-anchor="middle" fill="#2b2f36">busybox, docker.io/… → Docker Hub</text>
+<path d="M 1165.0 345.0 L 1165.0 289.0" fill="none" stroke="#e07b1f" stroke-width="1.4" stroke-dasharray="6,4" marker-end="url(#arrow-image)"/>
+<path d="M 1015.0 372.0 L 1065.0 372.0" fill="none" stroke="#e07b1f" stroke-width="1.4" stroke-dasharray="6,4" marker-end="url(#arrow-image)"/>
+<path d="M 735.0 372.0 L 785.0 372.0" fill="none" stroke="#e07b1f" stroke-width="1.4" stroke-dasharray="6,4" marker-end="url(#arrow-image)"/>
+<text x="25.0" y="440.0" font-size="11.5" font-weight="normal" font-style="normal" text-anchor="start" fill="#2b2f36">Costs now: every pod's relay takes the same address, so two pods must not share a compute node (each asks</text>
+<text x="25.0" y="454.4" font-size="11.5" font-weight="normal" font-style="normal" text-anchor="start" fill="#2b2f36">for a whole node, --exclusive), and Slurm must end a job's relay with the job (proctrack/cgroup). Each new</text>
+<text x="25.0" y="468.8" font-size="11.5" font-weight="normal" font-style="normal" text-anchor="start" fill="#2b2f36">image is converted on the compute node. Upstream, interLink could set the image prefix to each pod's own</text>
+<text x="25.0" y="483.1" font-size="11.5" font-weight="normal" font-style="normal" text-anchor="start" fill="#2b2f36">relay address, which would remove the fixed address and what it costs.</text>
+</svg>

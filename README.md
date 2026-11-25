@@ -7,6 +7,10 @@ of Isabel Moutinho's FEUP prototype.
   Global Storage and the Kubernetes API back through the login node.
 - **What it changes:** neither Argo nor interLink is modified. One wrapper is left, for a gap in the
   Slurm plugin (`subPath` on emptyDirs), and a patch for it is ready to propose upstream.
+- **Images:** with `IMAGE_MIRROR=on`, a workflow names any image. The job pulls it from an image
+  mirror in the cluster, through the same tunnel (tested on the testbed so far).
+- **[docs/diagrams/](docs/diagrams/):** the deployment, one submission, the communication and the
+  images, drawn.
 
 It has run on Deucalion's `normal-x86` partition from Ulisses (24 Nov 2026).
 - **[RUN_ON_ULISSES.md](RUN_ON_ULISSES.md):** the commands, in order.
@@ -22,11 +26,15 @@ It has run on Deucalion's `normal-x86` partition from Ulisses (24 Nov 2026).
   - `k8s-side.sh` runs on Ulisses.
   - `hpc-side.sh` runs on the Deucalion login node.
   - A `Makefile` wraps both.
+  - `image-mirror.yaml`: the image mirror in the cluster (`IMAGE_MIRROR=on`), so workflows can name
+    any image.
 - **`setup/hpc/subpath-fix/`**: the one wrapper left, the plugin's `sbatch`.
 - **`tests/argo-native/`**: Isabel's tests as plain Argo workflows, with TC00 (one step with artifacts)
   and TC11 (no internet from inside a step).
-  - `checks.tsv` lists what each test must leave in the Global Storage.
+  - `run.py` runs them and `checks.py` says what each must produce, in Argo and in the Global
+    Storage (Python, standard library only).
   - Their data is in `tests/datasets/`.
+- **`docs/diagrams/`**: how it works, drawn: deployment, submission, communication, images.
 - **`testbed/`**: a small copy of Deucalion on three Lima VMs. `make` at the repository root drives
   it, and runs the same `deploy/deucalion` scripts there as a user without root.
 - **`experiments/reverse-tunnel/`**:
