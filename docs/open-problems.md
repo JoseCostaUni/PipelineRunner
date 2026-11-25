@@ -17,9 +17,9 @@ is in the [CHANGELOG](CHANGELOG.md).
 
 ## Next steps, in order
 
-1. **The image mirror on Deucalion** (its conditions hold, above). `IMAGE_MIRROR=on`, `make up`,
-   `make test T="00 05 12"`, then all. Look at the probe's `processes` line first: Singularity converts
-   each new image in the job.
+1. **The full suite on Deucalion with the image mirror.** TC00, TC05, TC12 and TC13 have passed with it
+   (`20261125-132221`, `20261125-150457`); the rest have only run with images built beforehand. Then
+   decide whether the mirror becomes the default in `settings/deucalion.env.example`.
 2. **CNES's stress pipeline** (`mockpipelines/workflows/stress-pipeline.yaml`). It needs their
    `common-templates` (ingest and dispatch, in `lisa-sgs/sys/components/pipelinerunner`), their
    `artifact-repositories` keys and a `platform-config-map`, a GlobalStorage beside the LocalStorage

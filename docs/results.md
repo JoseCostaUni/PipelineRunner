@@ -27,6 +27,7 @@ was for.
 | `20261125-114031` | **Deucalion**, `normal-x86` | restructured (`cli/lisa`), mirror off | **All 11 tests pass** (TC12 skipped without the mirror). Every step pod a Slurm job in `normal-x86`, on `cnx019`, `cnx027`, `cnx046`, `cnx061`, `cnx076`, `cnx151`, `cnx395`, `cnx415`, `cnx425`. Times close to the bash version's run above (each test within a minute of it; the queue varies) |
 | `20261125-125806` and the run before it | testbed, `proctrack/cgroup` | image mirror on, with a registry token | TC00, **TC05** (failed under `proctrack/linuxproc`) and TC12 pass. TC13 fails on the testbed's architecture: ESA's scanner image was fetched with the token, but exists for `linux/amd64` only, and the testbed's compute node is `aarch64` |
 | `20261125-132221` | **Deucalion**, `normal-x86` | image mirror on, with a registry token | **TC00, TC05 and TC12 pass with the mirror** (`cnx019`, `cnx148`, `cnx423`). TC13: ESA's image fetched with the token, then the job ran out of memory converting it (`ReqMem 256M`, `OUT_OF_MEMORY`), and hung until the 30-minute timeout. Fixed in the evening: with the mirror every job asks for its node's whole memory |
+| `20261125-150457` | **Deucalion**, `normal-x86` | image mirror on, a registry token, jobs with their node's whole memory | **TC13 passes** (2m50s, `cnx080`): ESA's private scanner image, fetched by the mirror with the token, converted and run on the compute node |
 
 ## Time
 

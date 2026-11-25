@@ -71,6 +71,9 @@ three Lima VMs. Since 24 Nov 2026 `main` has only `reverse`; entries below that 
   (515) ran with `mem=1073M`, `MinMemoryNode=0`, though its script says `--mem=256`; the sidecar's unit
   on the login node has `Environment=SBATCH_MEM_PER_NODE=0`. Its 26 minutes are almost all the wait
   behind job 512 (above), until that workflow was deleted by hand.
+- **Deucalion, after the change** (run `20261125-150457`, `make up`, then `make test T=13`): **TC13
+  passed** in 2m50s on `cnx080`. ESA's private image, fetched by the mirror with the user's token,
+  converted on the compute node with the node's whole memory, and run.
 - `make unit`: 149 passed (new: the unit has the line with the mirror, and not without; a timed-out
   workflow's pods are deleted).
 
