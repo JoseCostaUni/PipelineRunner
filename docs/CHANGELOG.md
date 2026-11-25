@@ -16,6 +16,35 @@ three Lima VMs. Since 24 Nov 2026 `main` has only `reverse`; entries below that 
 
 ---
 
+## 2026-11-25 (late night): TC21, CNES's stress test with asterix.h5 (1 GiB), to time the tunnel; their inputs byte for byte
+
+**Context.** The user wants to run CNES's stress test with large inputs (`obelix.h5`, 10 GB) and expects
+datasets of about 500 GB. All data crosses the tunnel (Slurm's I/O forwarding and SSH, between Deucalion
+and Ulisses), and its throughput has never been measured. Capacity: Ulisses has 767 GB free on the disk
+that holds the MinIO's `emptyDir` (capped at 20 GiB until now); `/home/jcosta.up` on Deucalion has a
+25 GiB quota (778 MB used). Discussed: for 500 GB the LocalStorage must be inside Deucalion, next to the
+compute nodes, as in CNES's own data lifecycle; the tunnel would then carry control only. First, one
+measurement.
+
+**What changed.**
+- **TC21** (`tests/21-cnes-stress-asterix/`): CNES's pipeline, unchanged, with `asterix.h5` (1 GiB), one
+  module, one iteration, 1 GiB outputs, so each transfer stands alone in the logs: the ingest's copy into
+  the cache (down the tunnel and back), the module's stage-in and stage-out, the dispatch.
+- **Their inputs, byte for byte:** `cnes.generate` follows their script
+  (`data/stress-pipeline/scripts/create_global_inputs_for_stresspipeline.py`: numpy's legacy generator,
+  seed 42427, 1 MiB chunks of `randint(0, 255)`); `make up` provides those named in `CNES_STRESS_INPUTS`
+  (default `idefix asterix`; `obelix` on request). TC20's earlier `idefix.h5` was random bytes of ours.
+  numpy becomes a dependency.
+- **`MINIO_SIZE`** (default 50 GiB, was a fixed 20 GiB): the MinIO's `emptyDir` limit.
+
+**Evidence.**
+- Their script against ours, run side by side on the Mac: `idefix.h5`
+  `80826036d8a38001799f3cad077b097133651a2325def98032da60e3583abe28` and `asterix.h5`
+  `f055ec1e8aabf6fe6de35fc04d746e50674be1412ad2b4c2fdcba45a78c48ce8` (SHA-256), identical from both.
+- `make unit`: 167 passed.
+
+---
+
 ## 2026-11-25 (night): CNES's pipelines run unchanged; TC20, their stress test (branch `test/cnes-stress-test-pipeline`)
 
 **Context.** CNES sent a stress-test pipeline (`lisa-sgs/sys/testing/mockpipelines`,

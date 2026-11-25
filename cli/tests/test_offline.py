@@ -175,3 +175,17 @@ def test_cnes_templates_move_to_our_namespace(tmp_path):
     assert t["spec"] == {"templates": []}
     assert cnes.available(ctx.settings)
     assert not cnes.available(context(tmp_path, mirror=True).settings)    # no templates named
+
+
+def test_stress_inputs_are_cnes_bytes(tmp_path):
+    """The first MiB of CNES's stream (numpy's legacy generator, seed 42427); every input starts with it,
+    and the generator returns the file's SHA-256. Checked once against their own script: idefix.h5 and
+    asterix.h5 byte-identical (CHANGELOG, 25 Nov 2026)."""
+    import hashlib
+
+    from lisa.components import cnes
+    sha = cnes.generate(tmp_path / "x.h5", 1 << 20)
+    data = (tmp_path / "x.h5").read_bytes()
+    assert len(data) == 1 << 20 and sha == hashlib.sha256(data).hexdigest()
+    assert cnes.generate(tmp_path / "y.h5", 1 << 20) == sha          # the same bytes every time
+    assert max(data) == 254                                            # randint(0, 255): 255 never occurs

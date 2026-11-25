@@ -20,7 +20,8 @@ KNOWN = {
     "HPC_LOGIN_HOST", "HPC_USER", "HPC_PROJECT_ROOT", "SLURM_ACCOUNT", "SLURM_PARTITION", "SIDECAR_UNIT",
     "SIDECAR_PORT", "SSH_KEY", "INTERLINK_NODE_NAME", "ARGO_NAMESPACE", "TUNNEL_PORT", "VK_PORT", "VK_IP",
     "K8S_API_HOST", "K8S_API_PORT", "GS_ENDPOINT", "GS_BUCKET", "GS_INSECURE", "GS_ACCESS_KEY",
-    "GS_SECRET_KEY", "GS_SERVICE", "GS_GLOBAL_PREFIX", "CNES_TEMPLATES", "EXTRA_FORWARDS", "IL_VERSION",
+    "GS_SECRET_KEY", "GS_SERVICE", "GS_GLOBAL_PREFIX", "CNES_TEMPLATES", "CNES_STRESS_INPUTS", "MINIO_SIZE",
+    "EXTRA_FORWARDS", "IL_VERSION",
     "ARGO_VERSION", "ARGO_EXEC_IMAGE",
     "IMAGES", "IMAGE_MIRROR", "MIRROR_BIND", "MIRROR_PRIVATE_REGISTRY", "MIRROR_PRIVATE_USER",
     "MIRROR_PRIVATE_TOKEN", "MINIO_IMAGE", "LISA_HOME", "KUBECONFIG",
@@ -72,6 +73,7 @@ class Settings:
     gs_service: str
     gs_global_prefix: str           # buckets of CNES's GlobalStorage, on the same endpoint
     cnes_templates: tuple[str, ...]  # CNES's WorkflowTemplate files to apply (paths from the repository)
+    cnes_stress_inputs: tuple[str, ...]  # which of the stress test's inputs 'make up' provides
     extra_forwards: tuple[str, ...]
     il_version: str
     argo_version: str
@@ -83,6 +85,7 @@ class Settings:
     mirror_private_user: str
     mirror_private_token: str       # a GitLab personal access token with read_registry
     minio_image: str
+    minio_size: str                 # the MinIO's emptyDir limit (GS_ENDPOINT=cluster)
     kubeconfig: Path
     home: Home
     k8s_api_host: str = ""          # empty: taken from the kubeconfig
@@ -122,6 +125,7 @@ class Settings:
             gs_service=get("GS_SERVICE") or "global-storage",
             gs_global_prefix=get("GS_GLOBAL_PREFIX") or "globalstorage-",
             cnes_templates=tuple(get("CNES_TEMPLATES", "").split()),
+            cnes_stress_inputs=tuple((get("CNES_STRESS_INPUTS") or "idefix asterix").split()),
             extra_forwards=tuple(get("EXTRA_FORWARDS", "").split()),
             il_version=get("IL_VERSION") or "0.6.3",
             argo_version=get("ARGO_VERSION") or "v3.7.12",
@@ -133,6 +137,7 @@ class Settings:
             mirror_private_user=get("MIRROR_PRIVATE_USER", ""),
             mirror_private_token=get("MIRROR_PRIVATE_TOKEN", ""),
             minio_image=get("MINIO_IMAGE") or "docker.io/pgsty/minio:RELEASE.2026-08-04T00-00-00Z",
+            minio_size=get("MINIO_SIZE") or "50Gi",
             kubeconfig=kubeconfig.absolute(),   # the virtual kubelet refuses a relative path
             home=Home(home),
             k8s_api_host=get("K8S_API_HOST", ""),

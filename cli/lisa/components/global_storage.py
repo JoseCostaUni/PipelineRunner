@@ -46,7 +46,7 @@ def minio_on(ctx: Context) -> None:
         raise LisaError("GS_ACCESS_KEY (3 or more characters) and GS_SECRET_KEY (8 or more) become "
                         "this MinIO's credentials: set them")
     secret, *rest = render_yaml("cli/manifests/minio.yaml", namespace=s.namespace,
-                                service=s.gs_service, image=s.minio_image)
+                                service=s.gs_service, image=s.minio_image, size=s.minio_size)
     secret["stringData"] = {"MINIO_ROOT_USER": s.gs_access_key, "MINIO_ROOT_PASSWORD": s.gs_secret_key}
     for obj in (secret, *rest):
         c.apply(obj)

@@ -1,0 +1,34 @@
+# TC21: CNES's stress-test pipeline, unchanged, with asterix.h5 (1 GiB): the first measurement of how fast
+# data crosses the tunnel. Like TC20 (its comments say what the pipeline does), with one module and one
+# iteration, so each transfer stands alone and can be timed in its logs:
+#   ingest       the 1 GiB copied from the GlobalStorage into the LocalStorage's cache, by rclone in a pod
+#                on the compute node: down the tunnel and back up (its "Transferred: ... MiB/s" lines)
+#   stage-in     the module's init downloads the 1 GiB input (Argo's executor log, init)
+#   stage-out    its wait uploads its 1 GiB output (Argo's executor log, wait)
+#   dispatch     the 1 GiB final output read twice (a checksum, then the copy) and written to the
+#                GlobalStorage, again by rclone on the compute node
+# On Deucalion its folders take about 3 GiB of HPC_PROJECT_ROOT at once. 'make up' provides asterix.h5
+# (CNES_STRESS_INPUTS, default "idefix asterix").
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: native-21-cnes-stress-asterix-
+  labels: {test: native-21}
+spec:
+  workflowTemplateRef: {name: stress-pipeline}
+  podGC:
+    strategy: OnPodSuccess
+    deleteDelayDuration: 1h
+  arguments:
+    parameters:
+    - name: input-from-global
+      value: '{"fileName": "stress-pipeline/inputs/asterix.h5", "fileSize": "1024"}'
+    - {name: nb-cpu, value: "0.1"}
+    - {name: memory-size, value: "256M"}
+    - {name: module-duration, value: "30s"}
+    - {name: nb-output-per-module, value: "1"}
+    - {name: module-output-size-in-MiB, value: "1024"}
+    - {name: pipeline-output-size-in-MiB, value: "1024"}
+    - {name: module-ephemeral-data-in-MiB, value: "10"}
+    - {name: nb-parallel-modules, value: "1"}
+    - {name: nb-iterations, value: "1"}

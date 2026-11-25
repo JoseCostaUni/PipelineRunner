@@ -1,8 +1,9 @@
 # Not part of the runner: a stand-in Global Storage for trials, where none is reachable.
 # GS_ENDPOINT=cluster: a MinIO of ours in ARGO_NAMESPACE as the Global Storage, under the Service name
 # GS_SERVICE. The Kubernetes side reaches it at the Service's cluster IP, the jobs through the tunnel
-# under its name. Its data is in an emptyDir, lost when the pod restarts: enough for trials, as the
-# tests put back their own inputs before every run. 'lisa minio off' removes it. MinIO stopped
+# under its name. Its data is in an emptyDir of at most MINIO_SIZE on the node's disk, lost when the pod
+# restarts: enough for trials, as the tests put back their own inputs before every run and 'make up' the
+# stress test's. 'lisa minio off' removes it. MinIO stopped
 # publishing free images in October 2025, hence pgsty's build (MINIO_IMAGE). lisa fills in the keys
 # (GS_ACCESS_KEY, GS_SECRET_KEY).
 apiVersion: v1
@@ -36,7 +37,7 @@ spec:
         ports: [{containerPort: 9000}]
         readinessProbe: {httpGet: {path: /minio/health/ready, port: 9000}, periodSeconds: 5}
         volumeMounts: [{name: data, mountPath: /data}]
-      volumes: [{name: data, emptyDir: {sizeLimit: 20Gi}}]
+      volumes: [{name: data, emptyDir: {sizeLimit: "${size}"}}]
 ---
 apiVersion: v1
 kind: Service

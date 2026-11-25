@@ -5,10 +5,11 @@ and dispatch, and pipelines such as the stress test), the platform-config-map th
 Their files stay in their repositories (ESA's GitLab, private): CNES_TEMPLATES names local clones of them,
 so nothing of theirs is copied into this one. Their pipelines need the image mirror (they name public
 images from several registries) and a registry token (their ingest always runs a private image)."""
-import os
+import hashlib
 import tempfile
 from pathlib import Path
 
+import numpy
 import yaml
 
 from .. import LisaError
@@ -17,9 +18,28 @@ from ..paths import REPO
 from ..templates import render_one
 from . import global_storage
 
-# The stress test's smallest input, in the GlobalStorage bucket <GS_GLOBAL_PREFIX>test (CNES's docs:
-# idefix.h5, 10 MB, random bytes; their script also makes asterix.h5, 1 GB, and obelix.h5, 10 GB).
-STRESS_INPUT = ("test", "stress-pipeline/inputs/idefix.h5", 10 * 1024 * 1024)
+# The stress test's inputs, in the GlobalStorage bucket <GS_GLOBAL_PREFIX>test under stress-pipeline/inputs/
+# (CNES's document "StressTest Pipeline", 3.1). CNES_STRESS_INPUTS chooses which 'make up' provides.
+STRESS_BUCKET, STRESS_PREFIX = "test", "stress-pipeline/inputs"
+STRESS_INPUTS = {"idefix": 10 << 20, "asterix": 1 << 30, "obelix": 10 << 30}
+STRESS_SEED = 42427
+
+
+def generate(path: Path, size: int, chunk: int = 1 << 20) -> str:
+    """One input, byte for byte as CNES's script makes it (mockpipelines,
+    data/stress-pipeline/scripts/create_global_inputs_for_stresspipeline.py: numpy's legacy generator
+    seeded with 42427, 1 MiB chunks of randint(0, 255)). Returns its SHA-256."""
+    numpy.random.seed(STRESS_SEED)
+    digest = hashlib.sha256()
+    with open(path, "wb") as f:
+        written = 0
+        while written < size:
+            n = min(chunk, size - written)
+            data = bytearray(numpy.random.randint(low=0, high=255, size=(1, n), dtype=numpy.uint8))
+            f.write(data)
+            digest.update(data)
+            written += n
+    return digest.hexdigest()
 
 
 def available(s) -> bool:
@@ -56,13 +76,18 @@ def on(ctx: Context) -> None:
     ctx.say(f"CNES's templates in {s.namespace}: {', '.join(names)}; platform-config-map: images of "
             f"{s.mirror_private_name}/ through the mirror")
     store = global_storage.storage(ctx)
-    bucket, key, size = STRESS_INPUT
-    bucket = s.gs_global_prefix + bucket
+    bucket = s.gs_global_prefix + STRESS_BUCKET
     store.create_bucket(bucket)
-    if not store.exists(key, bucket):
-        with tempfile.NamedTemporaryFile() as f:
-            for _ in range(size // (1 << 20)):
-                f.write(os.urandom(1 << 20))
-            f.flush()
-            store.upload(Path(f.name), key, bucket)
-    ctx.say(f"GlobalStorage: s3://{bucket}/{key} ({size >> 20} MiB) for the stress test")
+    for name in s.cnes_stress_inputs:
+        if name not in STRESS_INPUTS:
+            raise LisaError(f"CNES_STRESS_INPUTS: no input '{name}' (there are {', '.join(STRESS_INPUTS)})")
+        key, size = f"{STRESS_PREFIX}/{name}.h5", STRESS_INPUTS[name]
+        if store.exists(key, bucket):
+            ctx.say(f"GlobalStorage: s3://{bucket}/{key} already there")
+            continue
+        ctx.say(f"GlobalStorage: generating {name}.h5 ({size >> 20} MiB) as CNES's script does, then uploading")
+        with tempfile.TemporaryDirectory(dir=s.home.root) as tmp:
+            f = Path(tmp) / f"{name}.h5"
+            sha = generate(f, size)
+            store.upload(f, key, bucket)
+        ctx.say(f"GlobalStorage: s3://{bucket}/{key} (sha256 {sha})")
