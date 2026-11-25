@@ -16,7 +16,99 @@ three Lima VMs. Since 24 Nov 2026 `main` has only `reverse`; entries below that 
 
 ---
 
-## 2026-11-25 (later): uv copies packages instead of cloning them (Ulisses)
+## 2026-11-25 (afternoon): the testbed on `proctrack/cgroup`; the image mirror reaches public.ecr.aws and ESA's GitLab
+
+**Context.** CNES sent a stress-test pipeline (`lisa-sgs/sys/testing/mockpipelines`,
+`workflows/stress-pipeline.yaml`). Its ingest and dispatch come from their runner's `common-templates`
+(`lisa-sgs/sys/components/pipelinerunner`), which always runs a private image,
+`gitlab.esa.int:4567/lisa-sgs/sys/sandbox/global-index/hdf5-reference-scanner:0.16.0`, and the pipeline
+itself names `public.ecr.aws/docker/library/alpine:latest`. The user chose to fetch both through the
+image mirror, with a token of theirs, and to rehearse on the testbed first.
+
+**What changed.**
+- **The testbed's Slurm uses `proctrack/cgroup`** (`testbed/guest/cn.sh`, and applied to the running
+  VMs), as Deucalion does. Under `proctrack/linuxproc` a finished job's relay could outlive the job and
+  hold the mirror's fixed address, which is how TC05 failed with the mirror (24 Nov). The testbed was
+  thus unable to run any multi-pod workflow with the mirror; the user agreed to the change.
+- **The mirror** (`runner/cluster/image-mirror.yaml`):
+  - a rule for `public.ecr.aws` (anonymous pulls);
+  - a rule for one private registry, `MIRROR_PRIVATE_REGISTRY` (default `gitlab.esa.int:4567`), with
+    credentials from the Secret `image-mirror-credentials`, filled from `MIRROR_PRIVATE_USER` and
+    `MIRROR_PRIVATE_TOKEN` (a personal access token with only `read_registry`). The token stays in the
+    cluster and never reaches the login node; `make evidence` also checks that it is not in the evidence;
+  - its images are named without the port (`gitlab.esa.int/<path>:<tag>`): behind the mirror's own
+    address (`127.77.0.1:5000/<name>`) a second `host:port` cannot be part of an image name. CNES's
+    templates take that prefix from their `platform-config-map` (`registry_sys`), so this stays platform
+    configuration;
+  - a hash of the configuration and the credentials on the pod template, so a change restarts zot by
+    itself (it reads both at start). This replaces the restart `mirror on` did by comparing the
+    ConfigMap.
+- **`settings/testbed.env.example`:** `IMAGE_MIRROR=on`, now that the testbed meets the mirror's
+  conditions. `settings/deucalion.env.example` keeps it `off` until the mirror has run on Deucalion.
+- **TC13** (`tests/13-private-image/`): a plain workflow naming
+  `gitlab.esa.int/lisa-sgs/sys/sandbox/global-index/hdf5-reference-scanner:0.16.0`, the scanner CNES's
+  ingest runs, and asking it for its help. It shows the private image fetched with the token and run on
+  the compute node. A new feature, `private-registry` (the mirror and a token), so `make test` skips it
+  without them.
+
+**Costs and open points.**
+- The token is a personal one: it acts as the user, and anyone with cluster-admin on the cluster can read
+  the Secret. Hence `read_registry` only, and an expiry. A deploy token of the project would be better,
+  if CNES or ESA can issue one.
+- The private registry's image is pulled by Singularity on the compute node, through the tunnel, like any
+  other with the mirror: the same first-pull cost.
+
+**Evidence.**
+- Testbed, the property itself: a job that leaves `setsid sleep 333` behind and exits (job 504): after the
+  job, no `sleep 333` is left on `cn`.
+- Testbed, `make testbed-test T="00 05 12"` with the mirror (run interrupted by the end of a working
+  session during TC12): TC00 passed (1m35s) and **TC05 passed** (5m56s, its three parallel steps one
+  after the other on `cn`, each with its own whole node), the test that failed under
+  `proctrack/linuxproc`.
+- Testbed, `make testbed-test T="12 13"` with the mirror and the user's token (run `20261125-125806`):
+  - **TC12 passed** (1m55s): `busybox:1.37` from Docker Hub through the mirror.
+  - **TC13 failed, for a reason of the testbed's.** The token works: zot logged in to
+    `gitlab.esa.int:4567` and synced the scanner image ("successfully synced image", 13:01:31), and the
+    job's Singularity fetched it through the tunnel. It then stopped: `no child with platform
+    linux/arm64 in index`. The image is built for `linux/amd64` only (its index, read from the mirror),
+    and the testbed's compute node is an Apple Silicon VM (`aarch64`). A known constraint, not a defect
+    (the user: "it really isn't a problem but a constraint"): an image must exist for the compute
+    node's architecture, as for Deucalion's ARM partitions. Now in `docs/architecture.md`, known limits.
+  - **A finding:** with `main`'s image unusable, the pod did not fail. It stayed Running (2/2), because
+    Argo's `wait` container waits for `main`, which never started; the test would have waited for its
+    30-minute timeout. Stopped by hand (`spec.shutdown: Stop`). In `docs/open-problems.md`.
+  - **A mistake in TC13, found by the run:** its `expect.yaml` checked a step `scanner`, but with a
+    single template as the entrypoint Argo names the pod after the workflow, so no step name can match.
+    The check is gone, and `lisa test` now refuses such a test (a new check in `suite.py`, with a unit
+    test).
+- `make unit`: 147 passed (new: the mirror's rules, its credentials, the restart on a change; TC13 in
+  the tests of the tests; step checks only on DAG or steps entrypoints).
+- The image's location and tags: GitLab's API for project `lisa-sgs/sys/sandbox/global-index` (read with
+  a `read_api` token the user lent for the search; `0.16.0` exists).
+
+---
+
+## 2026-11-25 (late morning): the restructured code on Deucalion; Deucalion meets the image mirror's conditions
+
+**What happened.** On Ulisses, after `make results` and `make restore` with the old code:
+`make setup` (with the `UV_LINK_MODE=copy` fix; interLink rebuilt into `~/lisa-runner`, a few minutes),
+`make check`, `make up`, `make test`.
+
+**Results.**
+- **All 11 tests pass** with the restructured code (run `20261125-114031`; TC12 skipped without the
+  mirror). Every step pod a Slurm job in `normal-x86`, on nine nodes (`cnx019`, `cnx027`, `cnx046`,
+  `cnx061`, `cnx076`, `cnx151`, `cnx395`, `cnx415`, `cnx425`). Each test took within a minute of the bash
+  version's run of the same morning (`20261125-013956`); the queue varies.
+- **`make check` on Deucalion:** `ProctrackType proctrack/cgroup`, and partition `normal-x86`
+  `OverSubscribe=EXCLUSIVE`: every job gets a whole node anyway. So the image mirror's two conditions
+  hold there: a job's relay ends with the job, and its `--exclusive` costs nothing extra.
+
+**Evidence.** On Ulisses: `~/PipelineRunner/results/20261125-114031/` (`report.md`, `where.tsv`), and the
+check's output in `~/PipelineRunner/results/check-*.txt`.
+
+---
+
+## 2026-11-25 (morning): uv copies packages instead of cloning them (Ulisses)
 
 **Problem.** The first `make setup` of the restructured code on Ulisses stopped before `lisa` ran: uv
 could not put the build dependencies into the environment.

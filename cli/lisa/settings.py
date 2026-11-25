@@ -21,7 +21,8 @@ KNOWN = {
     "SIDECAR_PORT", "SSH_KEY", "INTERLINK_NODE_NAME", "ARGO_NAMESPACE", "TUNNEL_PORT", "VK_PORT", "VK_IP",
     "K8S_API_HOST", "K8S_API_PORT", "GS_ENDPOINT", "GS_BUCKET", "GS_INSECURE", "GS_ACCESS_KEY",
     "GS_SECRET_KEY", "GS_SERVICE", "EXTRA_FORWARDS", "IL_VERSION", "ARGO_VERSION", "ARGO_EXEC_IMAGE",
-    "IMAGES", "IMAGE_MIRROR", "MIRROR_BIND", "MINIO_IMAGE", "LISA_HOME", "KUBECONFIG",
+    "IMAGES", "IMAGE_MIRROR", "MIRROR_BIND", "MIRROR_PRIVATE_REGISTRY", "MIRROR_PRIVATE_USER",
+    "MIRROR_PRIVATE_TOKEN", "MINIO_IMAGE", "LISA_HOME", "KUBECONFIG",
 }
 REQUIRED = ("HPC_LOGIN_HOST", "HPC_USER", "HPC_PROJECT_ROOT", "SLURM_ACCOUNT", "SLURM_PARTITION", "SSH_KEY",
             "INTERLINK_NODE_NAME", "ARGO_NAMESPACE", "GS_ENDPOINT", "GS_BUCKET", "GS_ACCESS_KEY",
@@ -75,6 +76,9 @@ class Settings:
     images: tuple[str, ...]
     image_mirror: bool
     mirror_bind: str
+    mirror_private_registry: str    # host:port of a registry the mirror logs in to (ESA's GitLab)
+    mirror_private_user: str
+    mirror_private_token: str       # a GitLab personal access token with read_registry
     minio_image: str
     kubeconfig: Path
     home: Home
@@ -120,6 +124,9 @@ class Settings:
             images=tuple(get("IMAGES", "").split()),
             image_mirror=(get("IMAGE_MIRROR") or "off") == "on",
             mirror_bind=get("MIRROR_BIND") or "127.77.0.1",
+            mirror_private_registry=get("MIRROR_PRIVATE_REGISTRY") or "gitlab.esa.int:4567",
+            mirror_private_user=get("MIRROR_PRIVATE_USER", ""),
+            mirror_private_token=get("MIRROR_PRIVATE_TOKEN", ""),
             minio_image=get("MINIO_IMAGE") or "docker.io/pgsty/minio:RELEASE.2026-08-04T00-00-00Z",
             kubeconfig=kubeconfig.absolute(),   # the virtual kubelet refuses a relative path
             home=Home(home),
@@ -165,6 +172,11 @@ class Settings:
     @property
     def mirror_address(self) -> str:
         return f"image-mirror.{self.namespace}.svc.cluster.local:5000"
+
+    @property
+    def mirror_private_name(self) -> str:
+        """How images of the private registry are named behind the mirror: its host, without the port."""
+        return self.mirror_private_registry.split(":")[0]
 
     @property
     def forwards(self) -> list[str]:

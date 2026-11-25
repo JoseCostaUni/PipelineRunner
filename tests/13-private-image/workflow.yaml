@@ -1,0 +1,21 @@
+# TC13: an image from LISA's private registry (ESA's GitLab), named as CNES's templates name it, with
+# the registry's host first: the reference scanner that CNES's ingest runs before every transfer. With
+# IMAGE_MIRROR=on and a registry token (MIRROR_PRIVATE_USER, MIRROR_PRIVATE_TOKEN), the job's
+# Singularity pulls it on the compute node from the image mirror in the cluster, which logs in to the
+# registry; the token never leaves the cluster. The step only asks the scanner for its help: it shows
+# that the image was fetched with the token and runs on the compute node. 'make test' skips it
+# without a token (its expect.yaml: needs).
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: native-13-private-image-
+  labels: {test: native-13}
+spec:
+  entrypoint: scanner
+  templates:
+  - name: scanner
+    container:
+      image: gitlab.esa.int/lisa-sgs/sys/sandbox/global-index/hdf5-reference-scanner:0.16.0
+      command: [lisa-scan-hdf5-references]
+      args: [--help]
+      resources: {limits: {cpu: "1", memory: 256Mi}}

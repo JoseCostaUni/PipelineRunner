@@ -4,7 +4,7 @@ expect.yaml:
   phase: Succeeded                  the workflow's final phase in Argo (required)
   steps: {<step>: <phase>}          steps that ran as pods, and the phase each ended in
   outputs: {<key>: <text or list>}  objects in the Global Storage after the run, and text each contains
-  needs: mirror                     run only when the setup has it ('lisa test' with no numbers skips it)
+  needs: mirror | private-registry  run only when the setup has it ('lisa test' with no numbers skips it)
 
 Every test also gets the 'where' check: each step pod ran on the virtual node, as a Slurm job in the
 partition. So no test can pass on Argo's word alone, nor with a step that ran on the Kubernetes side.
@@ -17,7 +17,8 @@ import yaml
 
 from .. import LisaError
 
-FEATURES = {"mirror": "the image mirror (IMAGE_MIRROR=on)"}
+FEATURES = {"mirror": "the image mirror (IMAGE_MIRROR=on)",
+            "private-registry": "the image mirror with a registry token (MIRROR_PRIVATE_TOKEN)"}
 
 
 @dataclass(frozen=True)

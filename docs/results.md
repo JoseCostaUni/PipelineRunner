@@ -2,7 +2,8 @@
 
 The tests are TC00 (one step with an input and an output artifact), Isabel Moutinho's tests TC01 to TC10
 rewritten as plain Argo workflows (TC08, user isolation, not ported), TC11 (no internet from inside a
-step) and TC12 (an image nobody built, with the image mirror). Each is checked in Argo and in the Global
+step), TC12 (an image nobody built, with the image mirror) and TC13 (an image from ESA's private
+registry, through the mirror with a registry token). Each is checked in Argo and in the Global
 Storage, and for where it ran: every step pod a Slurm job in the partition.
 
 The evidence of each run is in its folder (run IDs below): `results/` on the machine that ran it, and
@@ -22,6 +23,9 @@ was for.
 | `20261124-215423` | testbed | image mirror on | TC00 and TC12 pass; TC05 fails: a finished job's relay held the fixed address (`proctrack/linuxproc`) |
 | `20261125-010233` | testbed | image mirror off again | TC00 passes |
 | `20261125-013956` | **Deucalion**, `normal-x86` | bash scripts (`before-restructure`), mirror off | **All 11 tests pass** (TC00 to TC11; TC12 skipped without the mirror). 22 step pods, every one a Slurm job in `normal-x86`, on `cnx017`, `cnx066`, `cnx067`, `cnx074`, `cnx331`. TC11 passes on a real offline node. Evidence collected (`make evidence`) |
+| `20261125-022949` | testbed, user without root | restructured (`cli/lisa`) | TC00 and TC11 pass; then `status`, `evidence`, `check` and `restore` |
+| `20261125-114031` | **Deucalion**, `normal-x86` | restructured (`cli/lisa`), mirror off | **All 11 tests pass** (TC12 skipped without the mirror). Every step pod a Slurm job in `normal-x86`, on `cnx019`, `cnx027`, `cnx046`, `cnx061`, `cnx076`, `cnx151`, `cnx395`, `cnx415`, `cnx425`. Times close to the bash version's run above (each test within a minute of it; the queue varies) |
+| `20261125-125806` and the run before it | testbed, `proctrack/cgroup` | image mirror on, with a registry token | TC00, **TC05** (failed under `proctrack/linuxproc`) and TC12 pass. TC13 fails on the testbed's architecture: ESA's scanner image was fetched with the token, but exists for `linux/amd64` only, and the testbed's compute node is `aarch64` |
 
 ## Time
 

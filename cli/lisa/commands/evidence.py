@@ -100,7 +100,8 @@ def _blank(line: str) -> str:
 
 def _leaks(ctx: Context, folder: Path) -> str:
     """What secret is still in the folder: the secret key (plain or base64), the access key in base64 (the
-    form Secret data takes; the plain one is a user name, like 'lisa' in 'lisa-jcosta'), or a token."""
+    form Secret data takes; the plain one is a user name, like 'lisa' in 'lisa-jcosta'), a service-account
+    token, or the image mirror's registry token."""
     s = ctx.settings
     found = []
     text = "\n".join(p.read_text(errors="replace") for p in folder.rglob("*") if p.is_file())
@@ -110,4 +111,6 @@ def _leaks(ctx: Context, folder: Path) -> str:
         found.append("the access key in base64")
     if "eyJhbGciOi" in text:
         found.append("a token")
+    if s.mirror_private_token and s.mirror_private_token in text:
+        found.append("the image mirror's registry token")
     return " and ".join(found)

@@ -10,19 +10,22 @@ is in the [CHANGELOG](CHANGELOG.md).
 - **Since that run, tested on the testbed only:** container logs, `where.tsv`, TC11, `make evidence`, the
   tests' checks of where each step ran, the image mirror, and the restructure of 25 Nov (`runner/`,
   `cli/lisa` in Python, `settings/`, one folder per test, these docs).
-- **The restructure needs its first Deucalion run.** Moving Ulisses from the old scripts is a one-time
-  step ([operations](operations.md), section 5).
+- **The restructured code has run on Deucalion:** all 11 tests passed (`20261125-114031`), as with the
+  bash version the same morning.
+- **Deucalion meets the image mirror's conditions:** `proctrack/cgroup`, and `normal-x86` gives whole
+  nodes anyway (`OverSubscribe=EXCLUSIVE`), so the mirror's `--exclusive` costs nothing there.
 
 ## Next steps, in order
 
-1. **The full suite on Deucalion with the restructured code.** `make setup`, `make check`, `make up`,
-   `make test`, `make evidence`, `make results`. The first Deucalion run with: container logs, TC11 on a
-   real offline node, the where-check in every test, `report.md`. Copy it to
-   `~/Documents/Dissertation/evidence/deucalion/`.
-2. **The image mirror on Deucalion,** only if `make check` shows `ProctrackType proctrack/cgroup`; look at
-   the partition's `OverSubscribe` and the probe's `processes` line first. Then `IMAGE_MIRROR=on`,
-   `make up`, `make test T="00 05 12"` (05 is the one that failed on the testbed). Every pod takes a
-   whole node, which may be charged as one: ask Deucalion how jobs are billed.
+1. **The image mirror on Deucalion** (its conditions hold, above). `IMAGE_MIRROR=on`, `make up`,
+   `make test T="00 05 12"`, then all. Look at the probe's `processes` line first: Singularity converts
+   each new image in the job.
+2. **CNES's stress pipeline** (`mockpipelines/workflows/stress-pipeline.yaml`). It needs their
+   `common-templates` (ingest and dispatch, in `lisa-sgs/sys/components/pipelinerunner`), their
+   `artifact-repositories` keys and a `platform-config-map`, a GlobalStorage beside the LocalStorage
+   (two bucket prefixes of our MinIO, as their single-node setup does), and the private image
+   `gitlab.esa.int:4567/lisa-sgs/sys/sandbox/global-index/hdf5-reference-scanner:0.16.0`, which the
+   mirror fetches with a `read_registry` token (`MIRROR_PRIVATE_*`). Testbed first, small parameters.
 3. **The subPath wrapper,** the last piece of our code on the site. The patch is ready with a unit test
    (`runner/hpc/subpath-fix/upstream.patch`); the plugin's `main` still had the gap on 24 Nov 2026, and
    nobody had reported it. (a) An issue and a PR on `interlink-hq/interlink-slurm-plugin`, the right end
@@ -56,6 +59,12 @@ is in the [CHANGELOG](CHANGELOG.md).
    runs. The capability the split executor could not give.
 
 ## Open issues
+
+- **A pod whose image cannot be used does not fail.** When Singularity cannot fetch or convert `main`'s
+  image in the job, the pod stays Running: Argo's `wait` container waits for `main`, which never
+  started (TC13 on the testbed, 25 Nov). It only ends at the workflow's deadline. Options: an
+  `activeDeadlineSeconds` in the offload's `workflowDefaults`, or the plugin reporting a container that
+  never started; report it upstream to the Slurm plugin.
 
 - **Shared Argo with Gustavo** (to tackle last). `workflowDefaults` are global, so while our offload is
   on every workflow of that Argo goes to Deucalion. Options: an Argo `instanceID` per person with our own

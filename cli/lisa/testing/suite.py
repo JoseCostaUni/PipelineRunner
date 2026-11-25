@@ -49,7 +49,15 @@ class Test:
         p += [f"expect.yaml checks {k}, outside {self.prefix}" for k in self.expect.outputs if not self.owns(k)]
         p += [f"expect.yaml checks {k}, which is one of its inputs: it would pass without the workflow "
               "writing anything" for k in self.expect.outputs if k in self.inputs()]
+        if self.expect.steps and not self._has_steps():
+            p.append("expect.yaml checks steps, but the entrypoint is a single template: Argo names its pod "
+                     "after the workflow, so no step name can match")
         return p
+
+    def _has_steps(self) -> bool:
+        spec = self.workflow.get("spec", {})
+        entry = next((t for t in spec.get("templates", []) if t.get("name") == spec.get("entrypoint")), {})
+        return "dag" in entry or "steps" in entry
 
 
 def load(folder: Path) -> Test:

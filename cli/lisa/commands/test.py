@@ -16,7 +16,7 @@ def test(ctx: Context, wanted: list[str], timeout: int = 1800) -> int:
     problems = [f"{t.title}: {p}" for t in tests for p in t.problems()]
     if problems:
         raise LisaError("the tests themselves are wrong:\n  " + "\n  ".join(problems))
-    have = {"mirror"} if s.image_mirror else set()
+    have = ({"mirror"} | ({"private-registry"} if s.mirror_private_token else set())) if s.image_mirror else set()
     chosen = suite.select(tests, wanted) if wanted else tests
     out = RunFolder(ctx, RESULTS)
     if not wanted:              # all: those that need what this setup lacks are skipped

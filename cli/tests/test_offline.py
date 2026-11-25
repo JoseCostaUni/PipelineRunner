@@ -1,5 +1,6 @@
 """What lisa writes, with stand-ins for the cluster and the login node: the sidecar's files, Argo's
 workflowDefaults, and a run's report."""
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -88,3 +89,29 @@ def test_the_report_shows_what_each_check_expected_and_got(tmp_path):
     where = (out.path / "where.tsv").read_text().splitlines()[1].split("\t")
     assert where == ["TC00", "native-00-abc", "interlink-jcosta", "481", "arm", "cn", "COMPLETED"]
     assert (out.path / "TC00" / "diag.txt").read_text() == "interLink's state"
+
+
+def test_the_mirror_reaches_ecr_and_the_private_registry(tmp_path):
+    from lisa.components import image_mirror
+    ctx = context(tmp_path, mirror=True)
+    docs = {d["kind"]: d for d in image_mirror.manifests(ctx.settings)}
+    rules = json.loads(docs["ConfigMap"]["data"]["config.json"])["extensions"]["sync"]["registries"]
+    where = {r["urls"][0]: r["content"][0].get("destination") for r in rules}
+    assert where["https://public.ecr.aws"] == "/public.ecr.aws"
+    assert where["https://gitlab.esa.int:4567"] == "/gitlab.esa.int"
+    assert rules[-1]["content"][0] == {"prefix": "**"}          # bare names last, from Docker Hub
+    assert docs["Secret"]["stringData"] == {"credentials.json": "{}"}
+
+
+def test_the_mirror_logs_in_with_the_token_and_restarts_when_it_changes(tmp_path):
+    from lisa.components import image_mirror
+    without = image_mirror.manifests(context(tmp_path, mirror=True).settings)
+    env = tmp_path / "s.env"
+    env.write_text(env.read_text() + "MIRROR_PRIVATE_USER=jcosta\nMIRROR_PRIVATE_TOKEN=glpat-example\n")
+    s = Settings.load(env)
+    docs = {d["kind"]: d for d in image_mirror.manifests(s)}
+    assert json.loads(docs["Secret"]["stringData"]["credentials.json"]) == {
+        "gitlab.esa.int:4567": {"username": "jcosta", "password": "glpat-example"}}
+    stamp = lambda ds: next(d for d in ds if d["kind"] == "Deployment")[  # noqa: E731
+        "spec"]["template"]["metadata"]["annotations"]["lisa-runner/configuration"]
+    assert stamp(without) != stamp(list(docs.values()))

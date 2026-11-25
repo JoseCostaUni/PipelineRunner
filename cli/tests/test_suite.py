@@ -28,7 +28,7 @@ def perfect(t: suite.Test) -> dict[str, str]:
 
 
 def test_the_suite_is_all_there():
-    assert [t.id for t in TESTS] == ["00", "01", "02", "03", "04", "05", "06", "07", "09", "10", "11", "12"]
+    assert [t.id for t in TESTS] == ["00", "01", "02", "03", "04", "05", "06", "07", "09", "10", "11", "12", "13"]
 
 
 @pytest.mark.parametrize("t", TESTS, ids=lambda t: t.title)
@@ -99,3 +99,13 @@ def test_an_output_check_shows_the_line_it_found():
     (check,) = [c for c in evaluate(t.expect, outcome(t.expect, {"tests/11/network.txt": "internet: OPEN"}))
                 if c.kind == "output"]
     assert not check.passed and check.got == '"internet: OPEN"'
+
+
+def test_steps_need_a_dag_or_steps_entrypoint(tmp_path):
+    """A single-template workflow's pod is named after the workflow: a step check there can never pass."""
+    d = tmp_path / "51-single"
+    d.mkdir()
+    (d / "workflow.yaml").write_text("kind: Workflow\nspec:\n  entrypoint: one\n  templates:\n"
+                                     "  - name: one\n    container: {image: alpine}\n")
+    (d / "expect.yaml").write_text("phase: Succeeded\nsteps: {one: Succeeded}\n")
+    assert any("single template" in p for p in suite.load(d).problems())

@@ -104,11 +104,6 @@ class Cluster:
             time.sleep(3)
         return False
 
-    def restart_deployment(self, namespace: str, name: str) -> None:
-        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        self.merge_patch("apps/v1", "Deployment", name, namespace=namespace, patch={"spec": {"template": {
-            "metadata": {"annotations": {"kubectl.kubernetes.io/restartedAt": stamp}}}}})
-
     def pod_log(self, namespace: str, pod: str, container: str, tail: int | None = None) -> str:
         try:
             return client.CoreV1Api(self.api_client).read_namespaced_pod_log(

@@ -166,19 +166,26 @@ flowchart LR
 ```
 
 - **The mirror:** zot in the cluster, which fetches each image from its registry (Docker Hub, quay.io,
-  ghcr.io) and keeps it. Bare names go to Docker Hub, as Kubernetes reads them.
+  ghcr.io, public.ecr.aws) and keeps it. Bare names go to Docker Hub, as Kubernetes reads them.
+- **One private registry:** ESA's GitLab (`MIRROR_PRIVATE_REGISTRY`, default `gitlab.esa.int:4567`), which
+  the mirror logs in to with a token of yours (`read_registry` only) kept in a Secret in the cluster; it
+  never reaches the login node. Its images are named without the port (`gitlab.esa.int/<path>:<tag>`),
+  because a name behind the mirror's own address cannot hold a second one. CNES's pipelines take their
+  image prefixes from their `platform-config-map`, so that is platform configuration too.
 - **Reached through the tunnel:** every pod gets a forward to it, and the plugin's `ImagePrefix` is
   `docker://127.77.0.1:5000/` (with `--no-https`).
 - **Platform configuration, not the workflow's:** test TC12 names `busybox:1.37` and nothing else.
 - **The cost of a fixed address.** Singularity pulls before the container exists, where the tunnel's
   names do not resolve, so every pod's relay takes the same address (`interlink.eu/reverse-bind`). Two
   pods must then not share a node: each asks for a whole node (`--exclusive`). And Slurm must end a
-  job's relay with the job (`proctrack/cgroup`); on the testbed (`proctrack/linuxproc`) a finished
-  job's relay held the address for the next job.
+  job's relay with the job (`proctrack/cgroup`); under `proctrack/linuxproc` (the testbed's until 25 Nov
+  2026) a finished job's relay held the address for the next job. Deucalion meets both: it uses
+  `proctrack/cgroup`, and `normal-x86` gives every job a whole node anyway (`OverSubscribe=EXCLUSIVE`).
 - **The clean fix is upstream:** interLink could set the image prefix to each pod's own relay address,
   which it already derives from the pod's UID. That removes the fixed address and `--exclusive`.
-- **Status:** passed TC00 and TC12 on the testbed, failed TC05 there for the reason above; not run on
-  Deucalion. Hence off by default.
+- **Status:** off by default until it has run on Deucalion. On the testbed it passed TC00 and TC12,
+  and failed TC05 under `proctrack/linuxproc`; the testbed now uses `proctrack/cgroup`
+  ([results](results.md)).
 
 ## 5. The tool
 
@@ -226,6 +233,11 @@ Slurm job in the partition, so no test passes on Argo's word alone. The tool's o
 - **HTTPS would need a matching certificate.** The Global Storage is reached through a Service name, so
   over HTTPS its certificate would have to be valid for that name (plain HTTP here).
 - **Images:** built beforehand, or the image mirror with its costs (section 4).
+- **An image must exist for the compute node's architecture.** Images built beforehand take the login
+  node's (x86 on Deucalion); with the mirror, Singularity picks the compute node's platform from the
+  image's index. So x86-only images, such as ESA's reference scanner (`linux/amd64` only), run on
+  `normal-x86` but not on Deucalion's ARM partitions, nor on the testbed, whose VMs are `aarch64`
+  (Apple Silicon).
 - **One account per deployment.** All jobs share one Deucalion account, and job folders hold the pods'
   artifact keys and service-account tokens while they run.
 - **Argo's `workflowDefaults` are global.** While offload is on, every workflow of that Argo goes to

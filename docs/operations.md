@@ -47,6 +47,7 @@ Then `ssh ulisses`.
 screen -S trial                         # detach: Ctrl+A then D; back: screen -R trial
 cd ~/PipelineRunner && git pull
 make settings && vi settings/deucalion.env   # once: HPC_PROJECT_ROOT, GS_ACCESS_KEY, GS_SECRET_KEY; check the rest
+                                        # (with the image mirror, for ESA's images: MIRROR_PRIVATE_USER and _TOKEN)
 make setup                              # once
 make check                              # fix every FAIL first
 make up                                 # if a step fails: fix it, run it again
@@ -102,7 +103,7 @@ again after one. `make down` switches offload off and stops interLink, but leave
 (everything under `tests/` deleted, each test's `input/` uploaded), so that an earlier run cannot make a
 check pass. Each test prints `PASS` or `FAIL`, and every check under it with what it expected and what it
 got. `make test` fails unless every test passed. TC02 ends `Failed` on purpose; TC12 runs only with the
-image mirror.
+image mirror, and TC13 (an image from ESA's GitLab) only with the mirror and a registry token.
 
 **`make restore`** deletes the test workflows and waits for their pods to go (their job folders hold
 data, keys and tokens), switches offload off (putting back exactly the `workflowDefaults` that were
@@ -165,7 +166,7 @@ newer, about 35 GB of disk and 6.5 GB of RAM free (stop Colima first).
 | Ulisses, namespace `ARGO_NAMESPACE` | the namespace, if it did not exist; Role and RoleBinding `argo-workflow-role`; ConfigMap `artifact-repositories` (an existing one is saved first) and Secret `lisa-gs-creds`; WorkflowTemplate `lisa-modules`; the test workflows | `make restore` puts a saved ConfigMap back; `kubectl delete ns ARGO_NAMESPACE` removes the rest |
 | Ulisses, namespace `ARGO_NAMESPACE` | Service (and EndpointSlice) `GS_SERVICE`, for a Global Storage outside the cluster | `make down` |
 | Ulisses, namespace `ARGO_NAMESPACE`, `GS_ENDPOINT=cluster` | Deployment `lisa-minio`, Service `GS_SERVICE`, Secret `lisa-minio-root`: data in an `emptyDir` | `make minio-off` |
-| Ulisses, namespace `ARGO_NAMESPACE`, `IMAGE_MIRROR=on` | Deployment, Service and ConfigMap `image-mirror` | `make mirror-off` |
+| Ulisses, namespace `ARGO_NAMESPACE`, `IMAGE_MIRROR=on` | Deployment, Service and ConfigMap `image-mirror`; Secret `image-mirror-credentials` (**your registry token**, if `MIRROR_PRIVATE_TOKEN` is set) | `make mirror-off` |
 | Ulisses, namespace `INTERLINK_NODE_NAME` | Secret `lisa-hpc-ssh-key` (**the private key `SSH_KEY`**) and ConfigMap `lisa-hpc-known-hosts`; interLink copies both into each shadow namespace | `make down` deletes them and every copy |
 | Ulisses, node `INTERLINK_NODE_NAME` | the virtual node and its approved serving certificate request | `make restore` |
 | Ulisses, containerd | image `ghcr.io/interlink-hq/interlink/ssh-tunnel:0.6.3` | stays (removing it needs root) |
@@ -215,6 +216,7 @@ Start with `make status` and `make diag`. interLink's logs are in `~/lisa-runner
 | `main` finds a folder where it expects a file | The subPath fix did not run: `subpath-fix.log` in the job folder lists the binds it rewrote, and `SbatchPath` in `sidecar/SlurmConfig.yaml` must point to it |
 | "image not found" | `IMAGE_MIRROR=off`: the pod names an image that is not in `IMAGES`. Add it, then `make hpc A=images` |
 | `IMAGE_MIRROR=on`: a pull fails in `job.out` | `kubectl -n <ARGO_NAMESPACE> logs deploy/image-mirror`. A `mksquashfs` or thread error means the compute node's process limit is below its CPU count (the probe's `processes` line) |
+| `IMAGE_MIRROR=on`: an image of ESA's GitLab is not found, or `unauthorized` | Name it `gitlab.esa.int/<path>:<tag>`, without the port. The token in `MIRROR_PRIVATE_TOKEN` needs the `read_registry` scope and must not have expired; after changing it, `make up` (the mirror restarts by itself) |
 | `IMAGE_MIRROR=on`: a relay says the address is in use | Another relay holds it on that node: a pod sharing the node (the Slurm flags in `workflowDefaults` need `--exclusive`), or the relay of a job that just ended (`make check`: `ProctrackType`). Use `IMAGE_MIRROR=off` there |
 | `sbatch` is refused | The partition or account in the settings: `sinfo -s` on the login node |
 | `make setup` cannot build interLink | Ulisses needs github.com and go.dev. Otherwise build it elsewhere (`GOOS=linux GOARCH=amd64 go build ./cmd/interlink ./cmd/virtual-kubelet` at tag 0.6.3) and copy both binaries to `~/lisa-runner/interlink-0.6.3/` |
