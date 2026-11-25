@@ -20,7 +20,8 @@ KNOWN = {
     "HPC_LOGIN_HOST", "HPC_USER", "HPC_PROJECT_ROOT", "SLURM_ACCOUNT", "SLURM_PARTITION", "SIDECAR_UNIT",
     "SIDECAR_PORT", "SSH_KEY", "INTERLINK_NODE_NAME", "ARGO_NAMESPACE", "TUNNEL_PORT", "VK_PORT", "VK_IP",
     "K8S_API_HOST", "K8S_API_PORT", "GS_ENDPOINT", "GS_BUCKET", "GS_INSECURE", "GS_ACCESS_KEY",
-    "GS_SECRET_KEY", "GS_SERVICE", "EXTRA_FORWARDS", "IL_VERSION", "ARGO_VERSION", "ARGO_EXEC_IMAGE",
+    "GS_SECRET_KEY", "GS_SERVICE", "GS_GLOBAL_PREFIX", "CNES_TEMPLATES", "EXTRA_FORWARDS", "IL_VERSION",
+    "ARGO_VERSION", "ARGO_EXEC_IMAGE",
     "IMAGES", "IMAGE_MIRROR", "MIRROR_BIND", "MIRROR_PRIVATE_REGISTRY", "MIRROR_PRIVATE_USER",
     "MIRROR_PRIVATE_TOKEN", "MINIO_IMAGE", "LISA_HOME", "KUBECONFIG",
 }
@@ -69,6 +70,8 @@ class Settings:
     gs_access_key: str
     gs_secret_key: str
     gs_service: str
+    gs_global_prefix: str           # buckets of CNES's GlobalStorage, on the same endpoint
+    cnes_templates: tuple[str, ...]  # CNES's WorkflowTemplate files to apply (paths from the repository)
     extra_forwards: tuple[str, ...]
     il_version: str
     argo_version: str
@@ -117,6 +120,8 @@ class Settings:
             gs_access_key=get("GS_ACCESS_KEY", ""),
             gs_secret_key=get("GS_SECRET_KEY", ""),
             gs_service=get("GS_SERVICE") or "global-storage",
+            gs_global_prefix=get("GS_GLOBAL_PREFIX") or "globalstorage-",
+            cnes_templates=tuple(get("CNES_TEMPLATES", "").split()),
             extra_forwards=tuple(get("EXTRA_FORWARDS", "").split()),
             il_version=get("IL_VERSION") or "0.6.3",
             argo_version=get("ARGO_VERSION") or "v3.7.12",
@@ -162,6 +167,11 @@ class Settings:
     def gs_host(self) -> str:
         """The external endpoint's host (not used with GS_ENDPOINT=cluster)."""
         return self.gs_endpoint.rsplit(":", 1)[0]
+
+    @property
+    def gs_cache_bucket(self) -> str:
+        """Where CNES's ingest keeps GlobalStorage objects it has copied (their globalstoragecache)."""
+        return f"{self.gs_bucket}-globalstoragecache"
 
     @property
     def gs_fqdn(self) -> str:

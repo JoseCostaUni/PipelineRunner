@@ -16,6 +16,76 @@ three Lima VMs. Since 24 Nov 2026 `main` has only `reverse`; entries below that 
 
 ---
 
+## 2026-11-25 (night): CNES's pipelines run unchanged; TC20, their stress test (branch `test/cnes-stress-test-pipeline`)
+
+**Context.** CNES sent a stress-test pipeline (`lisa-sgs/sys/testing/mockpipelines`,
+`workflows/stress-pipeline.yaml`, and their document "StressTest Pipeline", 25 Nov 2026). Its ingest and
+dispatch come from their PipelineRunner's `common-templates` (`lisa-sgs/sys/components/pipelinerunner`,
+`.../chart/files/argo-workflows/workflows/common/CommonTemplates.yaml`), which read the platform from two
+ConfigMaps of their Helm chart. The private image their ingest runs already works (TC13, evening).
+
+**What changed.**
+- **The artifact repository in CNES's layout** (`runner/cluster/artifact-repository.yaml`): the default
+  repository is named `localstorage`, with their single keys beside it (`localstorage-s3-{bucket,
+  endpoint,protocol,secretname}`, `localstorage-globalstoragecache-s3-bucket`,
+  `globalstorage-s3-{endpoint,protocol,secretname,bucket-prefix}`), and the label
+  `workflows.argoproj.io/configmap-type: Parameter`, without which Argo does not let templates read
+  ConfigMap keys. Every key their templates read is there (checked against their files). The names
+  clash: what this repository calls the Global Storage (Isabel Moutinho's term) is CNES's
+  LocalStorage; their GlobalStorage is here buckets `GS_GLOBAL_PREFIX*` (default `globalstorage-`) on
+  the same MinIO, as in their single-node setup (`deployconfig/pipelinerunner/singlenode`).
+- **`runner/cluster/platform-config-map.yaml`:** `registry: ""` (public images by their plain names,
+  which the mirror fetches) and `registry_sys: gitlab.esa.int/` (ESA's images as the mirror serves
+  them). No `global-index-url`, so their dispatch skips LISA's global index.
+- **`cli/lisa/components/cnes.py`, run by `make up` when `CNES_TEMPLATES` is set:** applies their
+  WorkflowTemplates from the files named there (local clones; moved to `ARGO_NAMESPACE`, labelled as
+  ours), the platform-config-map, and the stress test's input in the GlobalStorage
+  (`globalstorage-test/stress-pipeline/inputs/idefix.h5`, 10 MiB of random bytes, as their script makes).
+  Nothing of theirs is copied into this repository: their code is ESA's, private, and this repository
+  may be public.
+- **TC20** (`tests/20-cnes-stress/`): a plain Workflow that runs their `stress-pipeline` template
+  (`workflowTemplateRef`) with small parameters (2 modules in parallel, 1 iteration, 30 s, 10 MiB files,
+  the 10 MB input). Ours only: `podGC.deleteDelayDuration: 1h`, so the pods outlive their success long
+  enough for the where-check. It checks the phase and three stages by their step names in CNES's files:
+  the ingest's reference scan, the final output, the dispatch's transfer. A new feature `cnes`
+  (templates, mirror, token).
+- `lisa test` accepts step checks on a workflow that uses a `workflowTemplateRef` (its entrypoint is in
+  the template).
+- **The release of stuck pods, corrected** (`testing/runner.py`). The evening's version deleted a test's
+  pods only when its workflow was still unfinished after the timeout. But Argo's stop marks the workflow
+  Failed within seconds while the stuck pod keeps running, so that never fired: TC20's scanner pod on the
+  testbed still held `cn` (job 516) after its test had ended. The runner now deletes any step pod still
+  Pending or Running once a test is over, whatever the workflow's phase.
+
+**Costs and open points.**
+- `CNES_TEMPLATES` names files outside this repository: Ulisses needs clones of the two repositories,
+  with ESA GitLab access.
+- The naming clash (our Global Storage, their LocalStorage) is only documented; renaming the `GS_*`
+  settings is for later.
+- Not yet run end to end: the testbed cannot run the scanner (amd64 only), so TC20 runs on Deucalion.
+  Unknowns there: whether the scanner accepts random bytes named `.h5`, and how much data the tunnel
+  carries (start small, then one parameter at a time).
+
+**Evidence.**
+- Their files against ours: loaded by `cnes.templates` (common-templates: 12 templates;
+  stress-pipeline: 5), the ConfigMap keys they read (9 in `artifact-repositories`, `registry` and
+  `registry_sys`) all present, and the three step names TC20 checks all in their files.
+- Testbed (run `20261125-151647`, `make up` with `CNES_TEMPLATES` naming copies of their two files):
+  `make up` applied `common-templates` and `stress-pipeline` in `lisa-jcosta`, the platform-config-map,
+  and the 10 MiB input. Argo accepted TC20 and resolved their template with our ConfigMaps: the ingest's
+  scanner pod named `gitlab.esa.int/lisa-sgs/sys/sandbox/global-index/hdf5-reference-scanner:0.16.0`
+  (`registry_sys`) and `AWS_ENDPOINT_URL=http://global-storage.lisa-jcosta.svc.cluster.local:9000`
+  (`globalstorage-s3-*`). It then stopped where expected, at the scanner (`no child with platform
+  linux/arm64`): TC20 runs end to end on Deucalion only.
+- Testbed, the corrected release (run `20261125-152642`, TC13 with a 4-minute timeout, stuck on the
+  testbed's architecture): Argo marked the workflow Failed, the runner recorded the test, then deleted
+  the pod still running (`diag.txt`: "the workflow is Failed but these pods were still running:
+  deleted"); 30 s later Slurm's queue was empty and no pod was left.
+- `make unit`: 159 passed (new: CNES's keys and label; their templates moved to our namespace; TC20 in
+  the tests of the tests).
+
+---
+
 ## 2026-11-25 (evening): the image mirror on Deucalion; with it, every job asks for its node's whole memory
 
 **What happened.** The first Deucalion run with `IMAGE_MIRROR=on` and the user's registry token (run

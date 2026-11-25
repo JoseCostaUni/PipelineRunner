@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 
 from .. import LisaError
-from ..components import argo, artifacts, global_storage, image_mirror, interlink, offload, sidecar, tunnel
+from ..components import argo, artifacts, cnes, global_storage, image_mirror, interlink, offload, sidecar, tunnel
 from ..context import Context
 from ..testing.runner import LABEL
 
@@ -69,8 +69,10 @@ def up(ctx: Context) -> None:
              ("the Global Storage under a Service name", global_storage.service_on),
              ("interLink: the tunnel to the sidecar, the API, the virtual kubelet", interlink.start),
              ("a pod reaches the login node's sshd, as the shadows will", _probe),
-             ("the Global Storage as Argo's artifact repository", artifacts.on),
-             ("offload on", offload.on)]
+             ("the Global Storage as Argo's artifact repository", artifacts.on)]
+    if s.cnes_templates:
+        todo.append(("CNES's pipelines: their templates, platform-config-map, GlobalStorage inputs", cnes.on))
+    todo += [("offload on", offload.on)]
     steps(ctx, *todo)
     ctx.say("== both sides up. Next: make test T=00")
 

@@ -124,14 +124,52 @@ def test_with_the_mirror_every_job_asks_for_its_whole_node_memory(tmp_path):
     assert active not in sidecar.rendered(context(tmp_path, mirror=False))["lisa-sidecar.service"]
 
 
-def test_a_workflow_still_running_after_its_timeout_has_its_pods_deleted(tmp_path):
-    """Its Slurm jobs would otherwise hold their nodes (TC13: a pod whose main never started)."""
+def test_pods_still_running_after_the_test_are_deleted(tmp_path):
+    """Their Slurm jobs would otherwise hold their nodes: a pod whose main never started survives Argo's
+    stop, though the workflow is then Failed (TC13 and TC20 on the testbed)."""
     from lisa.testing import runner
+    pods = [{"metadata": {"name": "done"}, "status": {"phase": "Succeeded"}},
+            {"metadata": {"name": "hung"}, "status": {"phase": "Running"}},
+            {"metadata": {"name": "queued"}, "status": {"phase": "Pending"}}]
+    assert [p["metadata"]["name"] for p in runner.stuck(pods)] == ["hung", "queued"]
     ctx = context(tmp_path, mirror=True)
     deleted = []
     ctx.cluster.delete = lambda api, kind, name, ns=None: deleted.append((kind, name))
     t = suite.select(suite.load_all(), ["13"])[0]
-    r = TestRun(t, "native-13-x", {"status": {"phase": "Running"}}, diag="state\n")
-    runner._release(ctx, r, [{"metadata": {"name": "native-13-x"}}])
-    assert deleted == [("Pod", "native-13-x")]
-    assert "deleted its pods (native-13-x)" in r.diag
+    r = TestRun(t, "native-13-x", {"status": {"phase": "Failed"}}, diag="state\n")
+    runner._release(ctx, r, runner.stuck(pods))
+    assert deleted == [("Pod", "hung"), ("Pod", "queued")]
+    assert "the workflow is Failed but these pods were still running: deleted (hung, queued)" in r.diag
+
+
+def test_the_artifact_repository_has_cnes_keys(tmp_path):
+    from lisa.components import artifacts
+    ctx = context(tmp_path, mirror=True)
+    configmap, secret = artifacts.manifests(ctx)
+    assert configmap["metadata"]["labels"]["workflows.argoproj.io/configmap-type"] == "Parameter"
+    assert configmap["metadata"]["annotations"]["workflows.argoproj.io/default-artifact-repository"] == "localstorage"
+    d = configmap["data"]
+    endpoint = "global-storage.lisa-jcosta.svc.cluster.local:9000"
+    assert yaml.safe_load(d["localstorage"])["s3"]["endpoint"] == endpoint
+    assert (d["localstorage-s3-bucket"], d["localstorage-s3-endpoint"], d["localstorage-s3-protocol"]) == \
+        ("argo-artifacts", endpoint, "http://")
+    assert d["localstorage-globalstoragecache-s3-bucket"] == "argo-artifacts-globalstoragecache"
+    assert (d["globalstorage-s3-endpoint"], d["globalstorage-s3-bucket-prefix"]) == (endpoint, "globalstorage-")
+    assert d["localstorage-s3-secretname"] == d["globalstorage-s3-secretname"] == secret["metadata"]["name"]
+
+
+def test_cnes_templates_move_to_our_namespace(tmp_path):
+    from lisa.components import cnes
+    f = tmp_path / "CommonTemplates.yaml"
+    f.write_text("apiVersion: argoproj.io/v1alpha1\nkind: WorkflowTemplate\nmetadata:\n"
+                 "  name: common-templates\n  generateName: common-templates-\n  namespace: argo-ddpc-systeam\n"
+                 "spec: {templates: []}\n---\nkind: ConfigMap\nmetadata: {name: other}\n")
+    env = tmp_path / "s.env"
+    ctx = context(tmp_path, mirror=True)
+    env.write_text(env.read_text() + f"CNES_TEMPLATES={f}\nMIRROR_PRIVATE_TOKEN=x\n")
+    ctx.settings = Settings.load(env)
+    (t,) = cnes.templates(ctx)
+    assert t["metadata"] == {"name": "common-templates", "namespace": "lisa-jcosta",
+                             "labels": {"app.kubernetes.io/managed-by": "lisa-runner"}}
+    assert cnes.available(ctx.settings)
+    assert not cnes.available(context(tmp_path, mirror=True).settings)    # no templates named

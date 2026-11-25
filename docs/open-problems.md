@@ -20,7 +20,8 @@ is in the [CHANGELOG](CHANGELOG.md).
 1. **The full suite on Deucalion with the image mirror.** TC00, TC05, TC12 and TC13 have passed with it
    (`20261125-132221`, `20261125-150457`); the rest have only run with images built beforehand. Then
    decide whether the mirror becomes the default in `settings/deucalion.env.example`.
-2. **CNES's stress pipeline** (`mockpipelines/workflows/stress-pipeline.yaml`). It needs their
+2. **CNES's stress pipeline** (`mockpipelines/workflows/stress-pipeline.yaml`): TC20, branch
+   `test/cnes-stress-test-pipeline`, ready for Deucalion (operations, section 4). It needs their
    `common-templates` (ingest and dispatch, in `lisa-sgs/sys/components/pipelinerunner`), their
    `artifact-repositories` keys and a `platform-config-map`, a GlobalStorage beside the LocalStorage
    (two bucket prefixes of our MinIO, as their single-node setup does), and the private image

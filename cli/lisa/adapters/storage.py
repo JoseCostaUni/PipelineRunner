@@ -28,16 +28,17 @@ class Storage:
         except BotoCoreError as e:
             return f"the Global Storage at {self.endpoint} does not answer: {e}"
 
-    def bucket_exists(self) -> bool:
+    def bucket_exists(self, bucket: str | None = None) -> bool:
         try:
-            self._s3.head_bucket(Bucket=self.bucket)
+            self._s3.head_bucket(Bucket=bucket or self.bucket)
             return True
         except ClientError:
             return False
 
-    def create_bucket(self) -> None:
-        if not self.bucket_exists():
-            self._s3.create_bucket(Bucket=self.bucket)
+    def create_bucket(self, bucket: str | None = None) -> None:
+        """The default bucket, or another one on the same endpoint."""
+        if not self.bucket_exists(bucket):
+            self._s3.create_bucket(Bucket=bucket or self.bucket)
 
     def delete_prefix(self, prefix: str) -> int:
         n = 0
@@ -48,11 +49,18 @@ class Storage:
                 n += len(keys)
         return n
 
-    def upload(self, path: Path, key: str) -> None:
+    def upload(self, path: Path, key: str, bucket: str | None = None) -> None:
         try:
-            self._s3.upload_file(str(path), self.bucket, key)
+            self._s3.upload_file(str(path), bucket or self.bucket, key)
         except (BotoCoreError, ClientError) as e:
             raise LisaError(f"upload of {path} to {self.bucket}/{key} failed: {e}") from None
+
+    def exists(self, key: str, bucket: str | None = None) -> bool:
+        try:
+            self._s3.head_object(Bucket=bucket or self.bucket, Key=key)
+            return True
+        except ClientError:
+            return False
 
     def read_text(self, key: str) -> str | None:
         """The object's content, or None when there is no such object."""

@@ -28,7 +28,8 @@ def perfect(t: suite.Test) -> dict[str, str]:
 
 
 def test_the_suite_is_all_there():
-    assert [t.id for t in TESTS] == ["00", "01", "02", "03", "04", "05", "06", "07", "09", "10", "11", "12", "13"]
+    assert [t.id for t in TESTS] == ["00", "01", "02", "03", "04", "05", "06", "07", "09", "10", "11", "12", "13",
+                                     "20"]
 
 
 @pytest.mark.parametrize("t", TESTS, ids=lambda t: t.title)

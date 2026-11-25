@@ -155,7 +155,34 @@ after changing the code. The results are in the trial user's `~/PipelineRunner/r
 (`make testbed-shell VM=ulisses`, then `sudo -u jcosta -i`). Requirements: Apple Silicon, Lima 1.0 or
 newer, about 35 GB of disk and 6.5 GB of RAM free (stop Colima first).
 
-## 4. What changes, and how to undo it
+## 4. CNES's pipelines
+
+CNES's pipelines run unchanged: their WorkflowTemplates are applied from clones of their repositories (ESA's
+GitLab, private; nothing of theirs is copied into this one). TC20 runs their stress test with small
+parameters. On Ulisses, once:
+
+```sh
+cd ~ && git clone https://gitlab.esa.int/lisa-sgs/sys/testing/mockpipelines.git
+git clone https://gitlab.esa.int/lisa-sgs/sys/components/pipelinerunner.git
+cd ~/PipelineRunner && vi settings/deucalion.env
+#   IMAGE_MIRROR=on, MIRROR_PRIVATE_USER, MIRROR_PRIVATE_TOKEN (their ingest runs a private image), and
+#   CNES_TEMPLATES="../pipelinerunner/pipelineexecutor/argo/argoworkflows/chart/files/argo-workflows/workflows/common/CommonTemplates.yaml ../mockpipelines/workflows/stress-pipeline.yaml"
+make up              # also applies their templates, the platform-config-map, and the stress test's input
+make test T=20
+```
+
+- **Their two storages, here:** their LocalStorage is our Global Storage (the default artifact
+  repository); their GlobalStorage is buckets named `GS_GLOBAL_PREFIX` + name on the same MinIO
+  (`globalstorage-test` for the stress test, with `stress-pipeline/inputs/idefix.h5`, 10 MB, which
+  `make up` uploads).
+- **Other parameters:** copy `tests/20-cnes-stress/workflow.yaml`, change its `arguments`, and
+  `kubectl -n lisa-jcosta create -f` it. Scale one parameter at a time: all data goes through the tunnel,
+  and the modules' ephemeral data and outputs are folders on the shared file system (`HPC_PROJECT_ROOT`),
+  so check its quota (`quotahome` on Deucalion).
+- **Where it ran:** the test keeps its pods an hour after they succeed (the template deletes them at
+  once), so `where.tsv` can list each step's Slurm job.
+
+## 5. What changes, and how to undo it
 
 | Where | Change | Undo |
 |---|---|---|
@@ -177,7 +204,7 @@ newer, about 35 GB of disk and 6.5 GB of RAM free (stop Colima first).
 | Deucalion, `~/.singularity/cache` | images the jobs pulled from the mirror (`IMAGE_MIRROR=on`) | `singularity cache clean` |
 | Global Storage | bucket `GS_BUCKET`, test data under `tests/` (reset before every run) | `make minio-off`, or delete them |
 
-## 5. Moving from the old scripts (once)
+## 6. Moving from the old scripts (once)
 
 The version before the restructure (tag `before-restructure`) ran from `deploy/deucalion` and kept its
 state in `~/lisa-trial`. `lisa` refuses to start while that version is on. On Ulisses:
@@ -194,7 +221,7 @@ make setup && make check                                  # rebuilds interLink i
 ignored (`make check` lists them). On Deucalion the old folders (`.interlink/`, `reverse-tunnel/`,
 `lisa-pipeline-runner_ze/` under `HPC_PROJECT_ROOT`) can be deleted, and on Ulisses `~/lisa-trial`.
 
-## 6. If something fails
+## 7. If something fails
 
 Start with `make status` and `make diag`. interLink's logs are in `~/lisa-runner/log/` (`il-vk.log`,
 `il-api.log`, `il-tunnel.log`); `make login` opens a shell on the login node, in `HPC_PROJECT_ROOT/runner`.
@@ -206,7 +233,7 @@ Start with `make status` and `make diag`. interLink's logs are in `~/lisa-runner
 | `the host key of ... changed` | After confirming the change is expected, delete the login node's lines from `~/lisa-runner/state/known_hosts` |
 | `port ... already in use` | Someone else uses it on that machine: pick another `TUNNEL_PORT`, `VK_PORT` or `SIDECAR_PORT` |
 | `singularity exec has no --no-eval` | The site's Singularity is too old: ask for Apptainer 1.1 or newer (`module avail`) |
-| `the version before the restructure is still on` | Section 5 |
+| `the version before the restructure is still on` | Section 6 |
 | The sidecar does not start | `make login`, then `tail ../sidecar/sidecar.log` and `systemctl --user status lisa-sidecar`. A `SocketDirRoot` error means the path is not valid for the plugin (`check` tests it) |
 | `hpc.sh images` fails with `pthread_create` or `Resource temporarily unavailable` | The limit of 150 processes and threads per user on the login node: look for leftover processes of yours there (`ps -u $USER`) |
 | The virtual node is not Ready after `up` | `make diag`; `il-tunnel.log` shows SSH problems, `il-api.log` the calls to the sidecar, `il-vk.log` the node and the pods |

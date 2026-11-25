@@ -72,19 +72,23 @@ def run(ctx: Context, test: Test, timeout: int, on_submit=lambda name: None) -> 
     r.checks = evaluate(test.expect, outcome)
     if not r.passed:
         r.diag = interlink.diagnostics(ctx)
-    if r.phase not in argo.DONE:
-        _release(ctx, r, pods)
+    _release(ctx, r, stuck(pods))
     return r
 
 
+def stuck(pods: list[dict]) -> list[dict]:
+    """Step pods still Pending or Running once the test is over (it ended, or timed out and was stopped).
+    A pod whose main never started survives Argo's stop, even after the workflow is marked Failed, and
+    its Slurm job keeps its node (a whole one with --exclusive)."""
+    return [p for p in pods if (p.get("status") or {}).get("phase") in ("Pending", "Running")]
+
+
 def _release(ctx: Context, r: TestRun, pods: list[dict]) -> None:
-    """A workflow still running after its timeout and a stop: a pod whose main never started stays
-    Running, and its Slurm job holds a node (a whole one with --exclusive). Its record is taken; delete
-    its pods, so interLink cancels their jobs."""
+    """Delete such pods once the test is recorded, so interLink cancels their Slurm jobs."""
     for p in pods:
         ctx.cluster.delete("v1", "Pod", p["metadata"]["name"], ctx.settings.namespace)
     if pods:
-        r.diag += (f"\n== still {r.phase} after the timeout and a stop: deleted its pods "
+        r.diag += (f"\n== the workflow is {r.phase} but these pods were still running: deleted "
                    f"({', '.join(p['metadata']['name'] for p in pods)}), so interLink cancels their Slurm jobs\n")
 
 

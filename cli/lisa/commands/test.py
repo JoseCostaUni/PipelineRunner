@@ -1,7 +1,7 @@
 """lisa test [NN ...]: run the tests in tests/ and check what they produced, in Argo and in the Global
 Storage, and where Slurm ran every step. The record goes to results/<run>/ (testing/report.py)."""
 from .. import LisaError
-from ..components import argo, artifacts, global_storage, interlink, offload, sidecar
+from ..components import argo, artifacts, cnes, global_storage, interlink, offload, sidecar
 from ..context import Context
 from ..paths import RESULTS
 from ..testing import runner, suite
@@ -17,6 +17,7 @@ def test(ctx: Context, wanted: list[str], timeout: int = 1800) -> int:
     if problems:
         raise LisaError("the tests themselves are wrong:\n  " + "\n  ".join(problems))
     have = ({"mirror"} | ({"private-registry"} if s.mirror_private_token else set())) if s.image_mirror else set()
+    have |= {"cnes"} if cnes.available(s) else set()
     chosen = suite.select(tests, wanted) if wanted else tests
     out = RunFolder(ctx, RESULTS)
     if not wanted:              # all: those that need what this setup lacks are skipped

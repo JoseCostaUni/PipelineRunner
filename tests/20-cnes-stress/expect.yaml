@@ -1,0 +1,9 @@
+# The whole pipeline succeeded, and each of its stages ran: the ingest's reference scan (ESA's private
+# image), the final output's creation, and the dispatch's transfer to the GlobalStorage. Step names are
+# those of CNES's templates.
+phase: Succeeded
+needs: cnes
+steps:
+  compute-references: Succeeded
+  output-file-creation: Succeeded
+  TransferData: Succeeded
