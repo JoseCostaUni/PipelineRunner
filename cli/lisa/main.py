@@ -6,7 +6,7 @@ from pathlib import Path
 
 from . import LisaError
 from .commands import evidence, inspect, lifecycle, test
-from .components import global_storage, image_mirror, sidecar
+from .components import cnes, global_storage, image_mirror, sidecar
 from .console import Console
 from .context import Context
 from .paths import REPO, RESULTS
@@ -25,6 +25,7 @@ COMMANDS = {
     "restore": "clean, down, the sidecar stopped, the virtual node deleted",
     "minio": "on|off: a MinIO in the cluster as the Global Storage (GS_ENDPOINT=cluster)",
     "mirror": "on|off: the image mirror in the cluster (IMAGE_MIRROR=on; 'up' starts it)",
+    "cnes": "install CNES's templates from CNES_DIR (~/cnes) to run them by hand; make the stress test's inputs",
     "sync": "copy hpc.sh and the sidecar's files to the login node ('up' and 'check' do this too)",
     "hpc": "run hpc.sh <command> on the login node (check, probe, install, images, status, jobs ...)",
     "login": "a shell on the login node",
@@ -43,6 +44,8 @@ def parse(argv: list[str]) -> argparse.Namespace:
             c.add_argument("--timeout", type=int, default=1800, help="seconds before a workflow is stopped")
         elif name == "evidence":
             c.add_argument("run", nargs="?", help="a folder in results/ (default: the last run)")
+        elif name == "cnes":
+            c.add_argument("inputs", nargs="*", help="stress-test inputs to provide: idefix, asterix, obelix")
         elif name in ("minio", "mirror"):
             c.add_argument("switch", choices=("on", "off"))
         elif name == "hpc":
@@ -66,6 +69,9 @@ def run(ctx: Context, a: argparse.Namespace) -> int:
             (global_storage.minio_on if a.switch == "on" else global_storage.minio_off)(ctx)
         case "mirror":
             (image_mirror.on if a.switch == "on" else image_mirror.off)(ctx)
+        case "cnes":
+            cnes.install(ctx)
+            cnes.provide_inputs(ctx, tuple(a.inputs))
         case "sync":
             sidecar.sync(ctx)
         case "hpc":

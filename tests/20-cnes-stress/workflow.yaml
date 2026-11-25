@@ -4,8 +4,8 @@
 # templates: a reference scan, a cache copy, a stream copy), then iterations of parallel stress modules
 # (stress-ng on CPU and memory, dd on the ephemeral storage, outputs to the LocalStorage), a final output,
 # and its dispatch to the GlobalStorage. Every pod of it runs as a Slurm job on the HPC side.
-# It needs CNES's templates applied ('make up' with CNES_TEMPLATES), the image mirror and a registry
-# token; 'make test' skips it otherwise (its expect.yaml: needs).
+# 'make test' installs CNES's two templates from ~/cnes and the input just before (its expect.yaml:
+# cnes); it needs the image mirror and a registry token, and 'make test' alone skips it without them.
 # Here: 2 modules in parallel, 1 iteration, 30 s of stress, 10 MiB files, the 10 MB input (idefix.h5).
 # The only thing of ours: the pods are deleted an hour after they succeed instead of at once (the
 # template's podGC), so the test can record where Slurm ran them.

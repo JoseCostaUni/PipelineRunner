@@ -80,6 +80,9 @@ minio minio-off: uv ## A MinIO in the cluster as the Global Storage (GS_ENDPOINT
 mirror mirror-off: uv ## The image mirror (IMAGE_MIRROR=on; 'up' starts it) / remove it
 	$(LISA) mirror $(if $(findstring off,$@),off,on)
 
+cnes: uv ## CNES's templates from ~/cnes, to run them by hand (Argo's UI); INPUTS="asterix" also makes inputs
+	$(LISA) cnes $(INPUTS)
+
 ##@ The testbed (on the Mac: Lima VMs cn, login, ulisses; testbed/README.md)
 TESTBED_DIR ?= $(CURDIR)/testbed
 LPR_DIR ?= $(abspath $(CURDIR)/../lisa-pipeline-runner)
@@ -132,5 +135,5 @@ unit: uv ## The tool's own tests (cli/tests): no cluster needed
 	$(UV) run --frozen pytest -q
 
 .PHONY: help uv settings setup check up test evidence restore results status diag down clean sync hpc login \
-        minio minio-off mirror mirror-off testbed-init testbed-vms testbed-test testbed testbed-check \
+        minio minio-off mirror mirror-off cnes testbed-init testbed-vms testbed-test testbed testbed-check \
         testbed-start testbed-stop testbed-status testbed-clean testbed-destroy testbed-shell testbed-net lint unit

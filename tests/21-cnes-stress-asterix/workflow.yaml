@@ -7,8 +7,8 @@
 #   stage-out    its wait uploads its 1 GiB output (Argo's executor log, wait)
 #   dispatch     the 1 GiB final output read twice (a checksum, then the copy) and written to the
 #                GlobalStorage, again by rclone on the compute node
-# On Deucalion its folders take about 3 GiB of HPC_PROJECT_ROOT at once. 'make up' provides asterix.h5
-# (CNES_STRESS_INPUTS, default "idefix asterix").
+# On Deucalion its folders take about 3 GiB of HPC_PROJECT_ROOT at once. 'make test' provides
+# asterix.h5 (its expect.yaml: cnes).
 apiVersion: argoproj.io/v1alpha1
 kind: Workflow
 metadata:

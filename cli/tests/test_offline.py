@@ -4,6 +4,7 @@ import json
 from dataclasses import replace
 from types import SimpleNamespace
 
+import pytest
 import yaml
 
 from lisa.adapters.hpc import Result
@@ -159,22 +160,27 @@ def test_the_artifact_repository_has_cnes_keys(tmp_path):
 
 
 def test_cnes_templates_move_to_our_namespace(tmp_path):
+    from lisa import LisaError
     from lisa.components import cnes
-    f = tmp_path / "CommonTemplates.yaml"
+    (tmp_path / "cnes").mkdir()
+    f = tmp_path / "cnes" / "CommonTemplates.yaml"
     f.write_text("apiVersion: argoproj.io/v1alpha1\nkind: WorkflowTemplate\nmetadata:\n"
                  "  name: common-templates\n  generateName: common-templates-\n  namespace: argo-ddpc-systeam\n"
                  "spec: {templates: []}\n---\nkind: ConfigMap\nmetadata: {name: other}\n")
     env = tmp_path / "s.env"
     ctx = context(tmp_path, mirror=True)
-    env.write_text(env.read_text() + f"CNES_TEMPLATES={f}\nMIRROR_PRIVATE_TOKEN=x\n")
+    env.write_text(env.read_text() + f"CNES_DIR={tmp_path}/cnes\nMIRROR_PRIVATE_TOKEN=x\n")
     ctx.settings = Settings.load(env)
-    (t,) = cnes.templates(ctx)
+    (t,) = cnes.templates(ctx, ("CommonTemplates.yaml",))
+    assert [x["metadata"]["name"] for x in cnes.templates(ctx)] == ["common-templates"]   # all files
     # Only the namespace changes: their metadata otherwise as in their file, their spec untouched.
     assert t["metadata"] == {"name": "common-templates", "generateName": "common-templates-",
                              "namespace": "lisa-jcosta"}
     assert t["spec"] == {"templates": []}
     assert cnes.available(ctx.settings)
-    assert not cnes.available(context(tmp_path, mirror=True).settings)    # no templates named
+    assert not cnes.available(context(tmp_path, mirror=True).settings)    # no registry token
+    with pytest.raises(LisaError, match="stress-pipeline.yaml"):          # says which file is missing
+        cnes.templates(ctx, ("CommonTemplates.yaml", "stress-pipeline.yaml"))
 
 
 def test_stress_inputs_are_cnes_bytes(tmp_path):

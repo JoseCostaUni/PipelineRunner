@@ -3,6 +3,9 @@
 # those of CNES's templates.
 phase: Succeeded
 needs: cnes
+cnes:                               # provided by 'make test' just before it runs
+  templates: [CommonTemplates.yaml, stress-pipeline.yaml]   # in CNES_DIR (~/cnes)
+  inputs: [idefix]
 steps:
   compute-references: Succeeded
   output-file-creation: Succeeded

@@ -1,12 +1,12 @@
 """The Global Storage as Argo's default artifact repository in ARGO_NAMESPACE, in the layout of CNES's
 PipelineRunner (runner/cluster/artifact-repository.yaml), under the Service name the jobs reach through
-the tunnel."""
+the tunnel; and the platform-config-map CNES's templates read (runner/cluster/platform-config-map.yaml)."""
 import json
 
 import yaml
 
 from ..context import Context
-from ..templates import render_yaml
+from ..templates import render_one, render_yaml
 from . import global_storage
 
 CONFIGMAP = "artifact-repositories"
@@ -40,6 +40,8 @@ def on(ctx: Context) -> None:
         _saved(ctx).write_text(json.dumps(existing))
         ctx.say(f"the existing {CONFIGMAP} saved to {_saved(ctx)}; 'lisa restore' puts it back")
     configmap, secret = manifests(ctx)
+    c.apply(render_one("runner/cluster/platform-config-map.yaml", namespace=s.namespace,
+                       registry_sys=f"{s.mirror_private_name}/"))
     c.apply(secret)
     c.apply(configmap)
     ctx.say(f"artifact repository: s3://{s.gs_bucket} at {global_storage.endpoint_for_jobs(ctx)}")

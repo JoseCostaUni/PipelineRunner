@@ -16,6 +16,44 @@ three Lima VMs. Since 24 Nov 2026 `main` has only `reverse`; entries below that 
 
 ---
 
+## 2026-11-25 (later still): CNES's pipelines, simpler: their files in `~/cnes`, each test brings what it uses
+
+**Problem.** TC21's first try failed in Argo (`stress-pipeline` not found) because `CNES_TEMPLATES` was
+not set, so `make up` had skipped CNES's step. The user: "I think this is doing a lot no? we should
+literally just have the workflow specified in the test with yaml and it should just run." Running their
+stress test took two settings (`CNES_TEMPLATES`, `CNES_STRESS_INPUTS`), clones or copies of their files on
+Ulisses at paths the settings named, a step in `make up`, and inputs uploaded there.
+
+**Why not simply put their files in the test's folder:** the repository is public (and must stay so, for
+Ulisses to pull it), and their files are ESA's, from a private GitLab. So they stay outside, in one fixed
+place.
+
+**What changed.**
+- **`CNES_DIR`** (default `~/cnes`) holds their WorkflowTemplate files; `CNES_TEMPLATES` and
+  `CNES_STRESS_INPUTS` are gone (an old settings file still loads; `make check` lists them as unread).
+- **Each test says what of CNES's it uses,** in its `expect.yaml`: `cnes: {templates: [...], inputs:
+  [...]}`. `make test` installs those templates and makes those inputs just before it submits; a missing
+  file fails that test with where to put it.
+- **`make up` keeps only the platform:** the artifact repository in their layout and the
+  platform-config-map, always.
+- **`make cnes [INPUTS="..."]`:** installs every template in `~/cnes` and makes the inputs, to run a
+  pipeline by hand, from Argo's UI as CNES's document does.
+- **An input is replaced unless it was made as CNES's script makes it:** the upload marks it (object
+  metadata `generator`, and its `sha256`), so the `idefix.h5` of random bytes uploaded before (TC20, the
+  night before) is made again.
+- **`docs/operations.md`, "CNES's pipelines":** how to run them, by test and by hand, and a table of what
+  their pipelines need from any platform that runs them (templates, the two ConfigMaps and their keys,
+  Secrets, the two storages, inputs, images and the private registry, memory to convert images, room on
+  the HPC side, bandwidth to the LocalStorage). The user asked for it as the requirements a future
+  interface would rely on.
+
+**Costs.** Their files must still be copied to `~/cnes` on Ulisses once.
+
+**Evidence.** `make unit`: 169 passed (new: `cnes:` in `expect.yaml`; templates from `CNES_DIR`, all or
+by name, and the error naming a missing file).
+
+---
+
 ## 2026-11-25 (late night): TC21, CNES's stress test with asterix.h5 (1 GiB), to time the tunnel; their inputs byte for byte
 
 **Context.** The user wants to run CNES's stress test with large inputs (`obelix.h5`, 10 GB) and expects

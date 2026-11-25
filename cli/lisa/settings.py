@@ -20,7 +20,7 @@ KNOWN = {
     "HPC_LOGIN_HOST", "HPC_USER", "HPC_PROJECT_ROOT", "SLURM_ACCOUNT", "SLURM_PARTITION", "SIDECAR_UNIT",
     "SIDECAR_PORT", "SSH_KEY", "INTERLINK_NODE_NAME", "ARGO_NAMESPACE", "TUNNEL_PORT", "VK_PORT", "VK_IP",
     "K8S_API_HOST", "K8S_API_PORT", "GS_ENDPOINT", "GS_BUCKET", "GS_INSECURE", "GS_ACCESS_KEY",
-    "GS_SECRET_KEY", "GS_SERVICE", "GS_GLOBAL_PREFIX", "CNES_TEMPLATES", "CNES_STRESS_INPUTS", "MINIO_SIZE",
+    "GS_SECRET_KEY", "GS_SERVICE", "GS_GLOBAL_PREFIX", "CNES_DIR", "MINIO_SIZE",
     "EXTRA_FORWARDS", "IL_VERSION",
     "ARGO_VERSION", "ARGO_EXEC_IMAGE",
     "IMAGES", "IMAGE_MIRROR", "MIRROR_BIND", "MIRROR_PRIVATE_REGISTRY", "MIRROR_PRIVATE_USER",
@@ -72,8 +72,7 @@ class Settings:
     gs_secret_key: str
     gs_service: str
     gs_global_prefix: str           # buckets of CNES's GlobalStorage, on the same endpoint
-    cnes_templates: tuple[str, ...]  # CNES's WorkflowTemplate files to apply (paths from the repository)
-    cnes_stress_inputs: tuple[str, ...]  # which of the stress test's inputs 'make up' provides
+    cnes_dir: str                   # where CNES's WorkflowTemplate files are (not in this public repository)
     extra_forwards: tuple[str, ...]
     il_version: str
     argo_version: str
@@ -124,8 +123,7 @@ class Settings:
             gs_secret_key=get("GS_SECRET_KEY", ""),
             gs_service=get("GS_SERVICE") or "global-storage",
             gs_global_prefix=get("GS_GLOBAL_PREFIX") or "globalstorage-",
-            cnes_templates=tuple(get("CNES_TEMPLATES", "").split()),
-            cnes_stress_inputs=tuple((get("CNES_STRESS_INPUTS") or "idefix asterix").split()),
+            cnes_dir=get("CNES_DIR") or str(Path.home() / "cnes"),
             extra_forwards=tuple(get("EXTRA_FORWARDS", "").split()),
             il_version=get("IL_VERSION") or "0.6.3",
             argo_version=get("ARGO_VERSION") or "v3.7.12",

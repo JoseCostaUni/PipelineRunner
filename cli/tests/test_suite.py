@@ -110,3 +110,10 @@ def test_steps_need_a_dag_or_steps_entrypoint(tmp_path):
                                      "  - name: one\n    container: {image: alpine}\n")
     (d / "expect.yaml").write_text("phase: Succeeded\nsteps: {one: Succeeded}\n")
     assert any("single template" in p for p in suite.load(d).problems())
+
+
+def test_cnes_tests_say_what_of_cnes_they_use():
+    for n in ("20", "21"):
+        e = suite.select(TESTS, [n])[0].expect
+        assert e.needs == "cnes" and e.cnes_templates == ("CommonTemplates.yaml", "stress-pipeline.yaml")
+    assert suite.select(TESTS, ["21"])[0].expect.cnes_inputs == ("asterix",)

@@ -49,18 +49,19 @@ class Storage:
                 n += len(keys)
         return n
 
-    def upload(self, path: Path, key: str, bucket: str | None = None) -> None:
+    def upload(self, path: Path, key: str, bucket: str | None = None, metadata: dict | None = None) -> None:
         try:
-            self._s3.upload_file(str(path), bucket or self.bucket, key)
+            self._s3.upload_file(str(path), bucket or self.bucket, key,
+                                 ExtraArgs={"Metadata": metadata} if metadata else None)
         except (BotoCoreError, ClientError) as e:
             raise LisaError(f"upload of {path} to {self.bucket}/{key} failed: {e}") from None
 
-    def exists(self, key: str, bucket: str | None = None) -> bool:
+    def metadata(self, key: str, bucket: str | None = None) -> dict | None:
+        """The object's user metadata, or None when there is no such object."""
         try:
-            self._s3.head_object(Bucket=bucket or self.bucket, Key=key)
-            return True
+            return self._s3.head_object(Bucket=bucket or self.bucket, Key=key).get("Metadata", {})
         except ClientError:
-            return False
+            return None
 
     def read_text(self, key: str) -> str | None:
         """The object's content, or None when there is no such object."""

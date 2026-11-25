@@ -204,7 +204,7 @@ it does:
 ```mermaid
 flowchart TB
   MAIN["main.py: the commands"] --> CMD["commands/<br/>lifecycle (setup, up, down, restore), inspect (check, status),<br/>test, evidence"]
-  CMD --> COMP["components/: one per part of the runner<br/>argo, offload, artifacts, global_storage, image_mirror,<br/>interlink, tunnel, sidecar"]
+  CMD --> COMP["components/: one per part of the runner<br/>argo, offload, artifacts, global_storage, image_mirror,<br/>interlink, tunnel, sidecar, cnes"]
   CMD --> TEST["testing/: suite, expect, runner, report"]
   TEST --> COMP
   COMP --> TPL["templates.py: fills in runner/"]

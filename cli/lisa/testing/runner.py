@@ -5,7 +5,8 @@ from dataclasses import dataclass, field
 
 import yaml
 
-from ..components import argo, global_storage, interlink, sidecar
+from .. import LisaError
+from ..components import argo, cnes, global_storage, interlink, sidecar
 from ..context import Context
 from ..paths import TESTS
 from .expect import Check, Outcome, Pod, evaluate
@@ -58,6 +59,11 @@ def prepare(ctx: Context, tests: list[Test]) -> None:
 
 def run(ctx: Context, test: Test, timeout: int, on_submit=lambda name: None) -> TestRun:
     r = TestRun(test)
+    try:                        # what of CNES's it uses: their templates, the stress test's inputs
+        cnes.prepare(ctx, test.expect.cnes_templates, test.expect.cnes_inputs)
+    except LisaError as e:
+        r.error = f"could not prepare it: {e}"
+        return r
     start = time.time()
     try:
         r.workflow_name = argo.submit(ctx, test.workflow, LABEL)
