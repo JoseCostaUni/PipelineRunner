@@ -26,7 +26,10 @@ one stress module, the final output and the dispatch back to the GlobalStorage. 
 job in `normal-x86` (nodes `cnx013`, `cnx087`, `cnx395`, `cnx396`). `make test` installed their two
 templates from `~/cnes` and generated `asterix.h5` with CNES's bytes (sha256
 `f055ec1e8aabf6fe6de35fc04d746e50674be1412ad2b4c2fdcba45a78c48ce8`, as their script makes it). The time per
-transfer is still to be read from its logs.
+transfer, read later from its logs (`results.tgz`; table in `docs/results.md`): 42 to 73 MiB/s through
+the tunnel for a single pod's transfers (rclone's ingest copy 51 MiB/s, dispatch 55 MiB/s; Argo's stage-out
+42 MiB/s, final output 73 MiB/s); the tunnel took 69 to 99 s to come up in each of the nine pods, about 13
+of the 27 minutes, against about 2.5 minutes of data.
 
 **Problem.** `make evidence` for that run stopped: "the Global Storage secret key found in the evidence:
 removed it, nothing kept". The check did its job. The cause: CNES's ingest and dispatch take the storage

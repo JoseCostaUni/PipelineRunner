@@ -40,9 +40,32 @@ job to run and starts the `sshd` in it. That took 68 to 84 s per pod on the test
   (120 s of CPU) 4m17s; TC09 and TC07 (chains of two and three steps) 4m55s and 6m42s; TC10 (five steps)
   10m20s. Steps in sequence add up: each pays its own queue wait and tunnel.
 
-Not measured yet: the tunnel's start-up on Deucalion apart from the queue, throughput with large
-artifacts, and how many pods run at once before the login node's process limit
-([open problems](open-problems.md)).
+### Through the tunnel, on Deucalion (TC21, run `20261125-165404`)
+
+One run, 1 GiB at each step, one pod at a time; read from the containers' own logs (Argo's executor,
+rclone) and Argo's record of each step:
+
+| Transfer | Who | Time for 1 GiB | Throughput |
+|---|---|---|---|
+| Ingest: GlobalStorage → LocalStorage cache, read and written through the tunnel at once | rclone (4 threads) | about 20 s | 51 MiB/s |
+| Ingest: cache → workspace | rclone | 0 s through the tunnel (copied inside MinIO) | |
+| Module stage-in: the input into its container | Argo `init` | at most 51 s, including its own start | at least 20 MiB/s |
+| Module stage-out: its output | Argo `wait` | 24.2 s | 42 MiB/s |
+| Final output | Argo `wait` | 13.9 s | 73 MiB/s |
+| Dispatch: checksum (read) | rclone | 16 s | 64 MiB/s |
+| Dispatch: LocalStorage → GlobalStorage, read and written through the tunnel at once | rclone | about 19 s | 55 MiB/s |
+
+**Where the 27 minutes went.** Nine pods, one after the other, each 2 to 3 minutes (the stress module 4m39s):
+the tunnel took 69 to 99 s to come up in every pod (about 13 minutes in all), the data about 2.5 minutes in
+all; the rest is Slurm starting the jobs, converting each image the first time it is used, and Argo's 10 s
+between steps. A step that moves no data (the ingest's cache check) took as long as one that moves 1 GiB.
+
+**What it means.** At 1 GiB the time is the per-pod overhead; at hundreds of GB it would be the bandwidth:
+at 40 to 75 MiB/s per pod, 500 GB takes about 2 to 3.5 hours each time it crosses the tunnel, and every
+stage-in and stage-out crosses it. Both point to keeping the data inside the HPC site (a LocalStorage next
+to the compute nodes) and to setting a pod up once rather than per step ([open problems](open-problems.md)).
+Not measured yet: several pods transferring at once (each has its own tunnel), and the time Slurm's queue
+adds apart from the tunnel.
 
 ## Against the earlier approach: the split executor
 
