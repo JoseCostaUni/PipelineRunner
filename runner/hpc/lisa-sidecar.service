@@ -1,0 +1,19 @@
+# The sidecar as a user service of HPC_USER on the login node (SIDECAR_UNIT; ~/.config/systemd/user/).
+# Without linger, which Deucalion does not allow, it runs while you have a session on the login node:
+# the SSH tunnel from the Kubernetes side is one. 'lisa restore' stops and removes it.
+[Unit]
+Description=interLink Slurm sidecar ${version} (LISA pipeline runner)
+After=network.target
+
+[Service]
+Environment=SLURMCONFIGPATH=${sidecar}/SlurmConfig.yaml
+Environment=SHARED_FS=true
+ExecStart=${plugin}
+WorkingDirectory=${sidecar}
+Restart=always
+RestartSec=5
+StandardOutput=append:${sidecar}/sidecar.log
+StandardError=append:${sidecar}/sidecar.log
+
+[Install]
+WantedBy=default.target

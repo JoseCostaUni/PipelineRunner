@@ -1,0 +1,33 @@
+# interLink's virtual kubelet, on the Kubernetes side (as your own process; lisa writes this file to
+# <LISA_HOME>/conf). It registers the virtual node INTERLINK_NODE_NAME and passes its pods to interLink's
+# API.
+#
+# Network.SSH with Reverse is the reverse tunnel of interLink 0.6.3 (docs/architecture.md): for every
+# pod, a shadow pod in this cluster logs in to the login node as HPC_USER with the key in the Secret
+# KeySecret, checks the login node against the ConfigMap KnownHostsConfigMap, reaches the pod's Slurm
+# job with 'srun --overlap' (NodeExec: srun) and starts an sshd there in user space (Sshd: userspace).
+# So nothing is installed on the site, and the site's sshd is never asked to forward.
+#
+# Offloaded containers reach the Kubernetes API through the tunnel at
+# kubernetes.default.svc.cluster.local:6443, because an unprivileged relay cannot bind port 443.
+InterlinkURL: "unix://${socket}"
+InterlinkPort: ""
+VerboseLogging: true
+ErrorsOnlyLogging: false
+NodeName: "${node}"
+Namespace: "${namespace}"
+KubernetesApiAddr: "kubernetes.default.svc.cluster.local"
+KubernetesApiPort: "6443"
+Network:
+  EnableTunnel: true
+  ShadowMode: "ssh"
+  SSH:
+    LoginHost: "${login_host}"
+    User: "${hpc_user}"
+    KeySecret: "lisa-hpc-ssh-key"
+    KnownHostsConfigMap: "lisa-hpc-known-hosts"
+    Image: "${shadow_image}"
+    Reverse:
+      Enabled: true
+      NodeExec: "srun"
+      Sshd: "userspace"

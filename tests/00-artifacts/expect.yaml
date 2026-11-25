@@ -1,0 +1,4 @@
+# The step read its input artifact and wrote its output artifact, in upper case.
+phase: Succeeded
+outputs:
+  tests/00/result.txt: HELLO FROM THE GLOBAL STORAGE

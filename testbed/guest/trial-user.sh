@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run as root on tb-ulisses: a user like 'jcosta' on Ulisses, to rehearse deploy/deucalion there.
+# Run as root on tb-ulisses: a user like 'jcosta' on Ulisses, to rehearse the runner's setup there.
 # No sudo, a kubeconfig with cluster-admin through a ServiceAccount token (as Isabel set up Ulisses),
 # its own copy of kubectl (the testbed's /usr/bin/kubectl is for root only) and an SSH key. Prints the
 # public key, to be added to lisa's authorized_keys on tb-login. Usage: trial-user.sh [user]

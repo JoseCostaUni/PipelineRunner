@@ -1,0 +1,6 @@
+# Each step's output is kept as a checkpoint: the first written, then transformed, then aggregated.
+phase: Succeeded
+outputs:
+  tests/07/file-1.txt: test-07-file
+  tests/07/file-2.txt: TEST-07-FILE
+  tests/07/file-3.txt: TEST-07-FILE

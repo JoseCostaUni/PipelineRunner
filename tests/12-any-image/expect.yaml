@@ -1,0 +1,5 @@
+# An image nobody built beforehand ran: pulled in the job from the image mirror, through the tunnel.
+phase: Succeeded
+needs: mirror
+outputs:
+  tests/12/image.txt: "image: BusyBox v1.37"

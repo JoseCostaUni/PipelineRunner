@@ -1,7 +1,8 @@
 __pycache__/
 *.pyc
-
-deploy/deucalion/deucalion.env
-.worktrees/**
-experiments/reverse-tunnel/results/
-/bin/
+.venv/
+.worktrees/
+# Settings files hold the Global Storage keys; only their examples are in git.
+settings/*.env
+# One folder per test run, and the output of 'make check'.
+results/

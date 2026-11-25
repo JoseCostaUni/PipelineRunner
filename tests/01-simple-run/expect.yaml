@@ -1,0 +1,4 @@
+# The one step ran, as a pod, and succeeded.
+phase: Succeeded
+steps:
+  compute: Succeeded

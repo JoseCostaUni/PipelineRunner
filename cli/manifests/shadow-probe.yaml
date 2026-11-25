@@ -1,0 +1,16 @@
+# Not part of the runner: a check. A pod with the shadow's image that reads the login node's SSH host
+# keys, the first thing every shadow pod does. 'lisa up' runs it once, so a pod network that cannot
+# reach the login node shows up there, not as pods stuck later.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: lisa-shadow-probe
+  namespace: ${namespace}
+  labels: {app.kubernetes.io/managed-by: lisa-runner}
+spec:
+  restartPolicy: Never
+  containers:
+  - name: probe
+    image: ${image}
+    imagePullPolicy: IfNotPresent
+    command: [ssh-keyscan, -T, "10", "${login_host}"]

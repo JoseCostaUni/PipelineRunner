@@ -1,14 +1,171 @@
 # Changelog and decision log
 
 What changed in this repository, **why**, what it cost, and the evidence for it. Newest first. Each
-entry names the commits, the test runs (folders under `deploy/deucalion/results/`, `testbed/logs/` or
-`experiments/reverse-tunnel/results/`) and the sources that justify the decision, so a design choice
-can be traced back to the problem that caused it.
+entry names the commits, the test runs (folders under `results/`, `testbed/logs/`, and before 25 Nov 2026
+`deploy/deucalion/results/` or `experiments/reverse-tunnel/results/`) and the sources that justify the
+decision, so a design choice can be traced back to the problem that caused it.
+
+Entries are kept as they were written: paths in them are those of their time. The restructure of
+25 Nov 2026 (first entry) maps the old paths to the new ones, and the tag `before-restructure` holds
+them (`git show before-restructure:<path>`).
 
 Terms: **split** = interLink 0.6.1 with the split executor (Argo's `init` and `wait` on the login
 node, only `main` in the Slurm job). **reverse** = interLink 0.6.3 with the reverse tunnel of its
 SSH shadow (the whole pod in the Slurm job). **Testbed** = `testbed/`, a small copy of Deucalion on
 three Lima VMs. Since 24 Nov 2026 `main` has only `reverse`; entries below that one describe both.
+
+---
+
+## 2026-11-25: the project restructure: `runner/`, `cli/lisa` in Python, `settings/`, a folder per test, five documents
+
+**Problem.** The user's words: it was "super difficult to actually understand what is the pipeline
+runner, what is config, what is for Ulisses". In detail:
+- **No line between the runner and its tooling.** Everything that gets installed (interLink's two
+  configuration files, the plugin's `SlurmConfig.yaml`, the systemd unit, Argo's `workflowDefaults`, the
+  MinIO and Global Storage manifests, the artifact repository) was written by heredocs inside
+  `k8s-side.sh` (937 lines) and `hpc-side.sh` (341 lines). The only way to see what the runner *is* was
+  to read 1,300 lines of bash.
+- **No single entry point:** two Makefiles (the root one for the testbed, `deploy/deucalion`'s for the
+  real site), two scripts, and `run.py`, which called back into `k8s-side.sh`.
+- **The Python was bash in Python:** `run.py` drove `argo`, `kubectl` and `mc` as commands and parsed
+  their output, and one 70-line function did everything for a test.
+- **Folders kept for history:** `experiments/reverse-tunnel/` (the first trial, finished),
+  `setup/hpc/` (one wrapper), `tests/datasets/users/...` (10 files, 8 of them empty placeholders, 2 for
+  the unported TC08).
+- **Twelve Markdown files** repeating each other, already drifting: links to `APPROACH.md` and
+  `CHANGELOG.md` at the root after they moved to `docs/`; a `diagrams.py` and PDFs the CHANGELOG
+  mentioned and the repository did not have; `NEXT_STEPS.md` calling pushed tags local; and
+  `deucalion.env.example` setting `IMAGE_MIRROR=on` while the docs said off.
+- **Tests that were hard to trust:** a PASS meant whatever `checks.py` checked, and nothing showed that a
+  check could fail.
+
+**Decisions** (the user's, in the session of 25 Nov): what the runner is (below); Python for the Kubernetes side; Mermaid for the
+diagrams for now (to be redrawn by hand for the thesis); the testbed left as it is ("it's for local test
+only, if it works it works"), only its pointers into `deploy/deucalion` changed; the subPath patch not
+proposed upstream yet; shared Argo and identity left for last; and this CHANGELOG kept whole, as the
+thesis's record of the process.
+
+**What the runner is.** Asked what they would hand CNES if they asked for it ("the whole python
+solution? probably not because that is ran on ulisses"), the user agreed on this definition, now at the
+top of the README: the runner is not a new program but a deployment architecture, Argo and interLink
+0.6.3 configured so that each step runs as a Slurm job on an offline partition and reaches back through
+the reverse tunnel. What a site gets is its configuration and one wrapper (`runner/`), the requirements
+on the site, an acceptance suite (`tests/`) and the documentation. `cli/` is how we deploy it on
+Ulisses as one user without root, run the suite and collect evidence; a site would deploy `runner/` its
+own way (in the cluster, as Deployments: open problems, next steps).
+
+**What changed.**
+- **`runner/`: what the runner is.** Every file that gets installed, as a real file with its why in a
+  comment, filled in from the settings with `${name}` placeholders: `runner/cluster/` (interLink's
+  configuration and the shadows' credentials, `workflow-defaults.yaml`, `artifact-repository.yaml`,
+  `global-storage/` for an endpoint outside the cluster, `image-mirror.yaml`) and `runner/hpc/`
+  (`SlurmConfig.yaml`, `lisa-sidecar.service`, `resources.sh`, `subpath-fix/` with the wrapper and
+  `upstream.patch`).
+- **`cli/manifests/`: what the tool puts in the cluster for itself,** kept out of `runner/` because a
+  site would not take them: the MinIO for trials (`GS_ENDPOINT=cluster`), the tests' namespace with
+  Argo's executor role, and the probe pod of `make up`.
+- **`cli/lisa`: how it is put in place, in Python** (3.11, Ulisses's own; dependencies pinned in
+  `uv.lock` and brought by `uv`, which `make` fetches into `~/lisa-runner/bin` without root):
+  - `adapters/`, the only code that talks to the outside: the Kubernetes API (the official client; Argo's
+    Workflows as API objects, server-side apply), S3 (`boto3`), the login node over SSH (`paramiko`,
+    host keys pinned on first contact and checked strictly after), HTTP, local processes;
+  - `components/`, one per part of the runner (argo, offload, artifacts, global_storage, image_mirror,
+    interlink, tunnel, sidecar);
+  - `commands/` (lifecycle, inspect, test, evidence) and `testing/` (suite, expect, runner, report);
+  - every module under about 200 lines.
+- **`cli/hpc.sh`: the login node's part, still bash** (the login node has no Python), 240 lines. It no
+  longer writes any configuration: `lisa` fills in the plugin's files from the settings and from what
+  the login node reports (where Slurm's commands are, the CPU architecture), and copies them to
+  `HPC_PROJECT_ROOT/runner`; `hpc.sh install` puts them in place.
+- **The login node's layout:** `HPC_PROJECT_ROOT/{runner,sidecar,sock,images}` instead of `.interlink/`,
+  `reverse-tunnel/` and `lisa-pipeline-runner_ze/`. The socket folder is shorter, so `HPC_PROJECT_ROOT`
+  may now have up to 74 characters (59 before).
+- **`settings/`:** `deucalion.env` and `testbed.env` (and their examples). `HPC_REPO_DIR` is gone;
+  `IMAGE_MIRROR` defaults to `off` in the example too, and is called experimental there.
+- **One entry point, the root `Makefile`:** `make settings/setup/check/up/test/evidence/restore` for a
+  site, `make testbed-*` for the testbed, `make unit` and `make lint` for the tool itself. `up` and
+  `check` copy the login node's files first, so a forgotten `make sync` can no longer leave the login
+  node on old settings.
+- **Tests: one folder each,** `tests/NN-name/` with `workflow.yaml` (plain Argo, unchanged but for its
+  keys), `expect.yaml` (what it must produce, declared instead of coded) and `input/`. Each test reads and
+  writes only under `tests/NN/` in the Global Storage (before: Isabel's `users/admin/test-NN/`,
+  `users/system/test-NN/` and `t1/`). Before a run everything under `tests/` is deleted and the inputs
+  uploaded.
+- **Trusting a PASS:**
+  - `report.md` per run: every check with what it expected and what it got, an artifact's actual
+    content too, and each step pod's Slurm job, partition and compute node;
+  - the terminal shows every check, not only failed ones;
+  - `cli/tests/` (`make unit`, 137 tests, no cluster needed) proves that every test fails on a run that
+    did nothing, on a run where Argo says Succeeded but nothing was written, on wrong content, and when a
+    step ran off the virtual node, without a Slurm record or in another partition;
+  - `lisa test` refuses to run a test that reads or checks keys outside its own prefix, or that checks
+    one of its own inputs (it would pass without the workflow writing anything).
+- **Docs:** `README.md` (what is where), `docs/architecture.md` (with Mermaid diagrams: what runs where,
+  one pod's sequence, the data path, images, the tool), `docs/operations.md` (`RUN_ON_ULISSES.md`,
+  `HOW_TO_RUN.md` and `deploy/deucalion/README.md` merged), `docs/results.md`, `docs/open-problems.md`
+  (was `NEXT_STEPS.md`), and this CHANGELOG. The SVG diagrams are gone (in the tag).
+- **Names:** `lisa-runner` instead of `deucalion-trial` (label `app.kubernetes.io/managed-by`), `lisa-*`
+  instead of `trial-*` (`lisa-hpc-ssh-key`, `lisa-hpc-known-hosts`, `lisa-probe`), `~/lisa-runner`
+  instead of `~/lisa-trial`. The split mode's leftovers (`SPLIT_ENV`, `REVERSE_IL_VERSION`,
+  `split-gs-creds`, the `split-trial` label) are gone.
+- **`Ulisses tutorials.pdf`** (Isabel's access guide) removed from the repository by the user.
+- **Fixed on the way:** `tunnel off` deleted every Service labelled as ours in the namespace, which with an
+  external Global Storage included the image mirror's; now only the Global Storage's Service and
+  EndpointSlice, by name.
+
+**Old path → new path.**
+
+| Before | Now |
+|---|---|
+| `deploy/deucalion/k8s-side.sh` | `cli/lisa/` (Python), with the configuration it wrote in `runner/cluster/` |
+| `deploy/deucalion/hpc-side.sh` | `cli/hpc.sh`, with the configuration it wrote in `runner/hpc/` |
+| `deploy/deucalion/Makefile`, root `Makefile` | root `Makefile` (`make <target>`, `make testbed-<target>`) |
+| `deploy/deucalion/{deucalion,testbed}.env.example` | `settings/` |
+| `deploy/deucalion/image-mirror.yaml` | `runner/cluster/image-mirror.yaml` |
+| the MinIO, the namespace role and the probe pod, as heredocs in `k8s-side.sh` | `cli/manifests/` |
+| `deploy/deucalion/results/` | `results/` |
+| `setup/hpc/subpath-fix/` | `runner/hpc/subpath-fix/` |
+| `experiments/reverse-tunnel/upstream/0001-...patch` | `runner/hpc/subpath-fix/upstream.patch` |
+| `experiments/reverse-tunnel/` (README, local results) | tag `before-restructure`; the results in `~/Documents/Dissertation/evidence/reverse-tunnel-experiment/` |
+| `tests/argo-native/NN-name.yaml`, `checks.py`, `run.py` | `tests/NN-name/{workflow,expect}.yaml`, `cli/lisa/testing/` |
+| `tests/datasets/users/...` | `tests/NN-name/input/` |
+| `RUN_ON_ULISSES.md`, `HOW_TO_RUN.md`, `deploy/deucalion/README.md` | `docs/operations.md` |
+| `docs/APPROACH.md` | `docs/architecture.md`, `docs/results.md` |
+| `docs/NEXT_STEPS.md` | `docs/open-problems.md` |
+| `~/lisa-trial` (Ulisses) | `~/lisa-runner` |
+
+**Costs and open points.**
+- **More lines in all:** 2,570 lines of Python (the tool) and 240 of bash (`hpc.sh`), plus the
+  templates and 306 lines of the tool's own tests, against 1,624 lines of bash and Python before
+  (`k8s-side.sh`, `hpc-side.sh`, `run.py`, `checks.py`). In exchange, each part can be read on its own,
+  and the tool has tests of its own.
+- **Dependencies:** `kubernetes`, `boto3`, `paramiko`, `PyYAML` and `uv`, fetched from PyPI and GitHub
+  (Ulisses reaches both). Before: the standard library, `kubectl`, `jq`, `argo` and `mc`.
+- **A one-time move on Ulisses and Deucalion** (`docs/operations.md`, section 5): restore with the old
+  code, then set up again. interLink is rebuilt into `~/lisa-runner`. `lisa` refuses to start while the
+  old version's state says it is on.
+- **Not yet run on Deucalion** at the time of this entry; the bash version's full run of the same day is
+  in the evidence below. The testbed rehearsal ran before the three manifests moved to `cli/manifests/`:
+  that move changed only paths, which the unit tests check (every template the code names exists and
+  fills in), but it has not been run against a cluster since.
+- **The layout is a working base, not the final one.** The user, on committing it: "I'm still not the
+  biggest fan of the folder structure but if it works we can work upwards". Later changes to the layout
+  get their own entries here.
+
+**Evidence.**
+- `make unit`: 137 passed; `make lint`: ruff clean.
+- Deucalion, the same day, with the bash scripts (`before-restructure`), run `20261125-013956`: all 11
+  tests pass (TC12 skipped without the mirror), 22 step pods, all Slurm jobs in `normal-x86` on
+  `cnx017`, `cnx066`, `cnx067`, `cnx074` and `cnx331`. The first Deucalion run of the full suite, and of
+  TC11 on a real offline node. Evidence collected on Ulisses in
+  `~/PipelineRunner/deploy/deucalion/results/20261125-013956/`.
+- Testbed, the restructured code, as the trial user without root: `make testbed-init` (setup) and
+  `make testbed-test T="00 11"`, run `20261125-022949`: TC00 3/3, TC11 3/3 (Slurm jobs 499 and 500,
+  partition `arm`, node `cn`). Then, on the same testbed: `make testbed A=status`, `A=evidence` (the
+  binaries' `vcs.revision` is the tag's commit `6b0203b0`; the plugin's sha256 matches the release's
+  published checksum), `A=check` (every check PASS; the probe shows the compute node offline, and
+  `srun --overlap` works), and `A=restore` (the virtual node, the credentials and every copy deleted,
+  `workflowDefaults` and `artifact-repositories` put back).
 
 ---
 

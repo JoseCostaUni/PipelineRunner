@@ -1,0 +1,6 @@
+# A step wrote a file, and the next step read it, passed as an artifact.
+phase: Succeeded
+steps:
+  compute-read: Succeeded
+outputs:
+  tests/09/new-file.txt: test-09

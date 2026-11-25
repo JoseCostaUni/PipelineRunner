@@ -1,0 +1,4 @@
+# A long step (120 s of CPU) ran to its end.
+phase: Succeeded
+outputs:
+  tests/06/simulation.txt: completed after 120 seconds

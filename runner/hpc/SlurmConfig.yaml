@@ -1,0 +1,40 @@
+# interLink's Slurm plugin 0.6.3 (the "sidecar"), on the login node as HPC_USER. lisa fills this in on
+# the Kubernetes side, 'sync' copies it to HPC_PROJECT_ROOT/runner, and hpc.sh install puts it in
+# HPC_PROJECT_ROOT/sidecar and restarts the sidecar when it changed. Based on Isabel Moutinho's
+# (setup/hpc/1-bridge.sh) without what only that prototype used, set up for the
+# reverse tunnel:
+#
+#   SbatchPath          the subPath fix, the one wrapper left (runner/hpc/subpath-fix/sbatch)
+#   ImagePrefix         where images come from, as compute nodes cannot pull from the internet: the
+#                       images built beforehand on the login node (HPC_PROJECT_ROOT/images/), or with
+#                       IMAGE_MIRROR=on the image mirror in the cluster through the pod's relay
+#                       (docker://<MIRROR_BIND>:5000/; lisa then adds --no-https below)
+#   --no-eval           Apptainer would evaluate every environment value a second time and corrupt
+#                       Argo's ARGO_TEMPLATE
+#   --contain           each container gets its own /tmp, as in Kubernetes
+#   SocketDirRoot       where each job's tunnel sockets live (shared with the compute nodes)
+#   ResourceScriptPath  a fixed capacity: plugin 0.6.3 reports the free memory it sees, which fell
+#                       below one pod's request on the testbed and left pods Pending
+SidecarURL: "http://127.0.0.1"
+SidecarPort: "${port}"
+SbatchPath: "${sidecar}/subpath-fix/sbatch"
+ScancelPath: "${scancel}"
+SqueuePath: "${squeue}"
+SinfoPath: "${sinfo}"
+CommandPrefix: ""
+ImagePrefix: "${image_prefix}"
+SingularityPath: "singularity"
+SingularityPrefix: ""
+SingularityDefaultOptions:
+  - "--no-eval"
+  - "--contain"
+ExportPodData: true
+DataRootFolder: "${sidecar}/jobs/"
+Namespace: "vk"
+Tsocks: false
+BashPath: /bin/bash
+VerboseLogging: true
+ErrorsOnlyLogging: false
+EnableProbes: true
+SocketDirRoot: "${sockets}"
+ResourceScriptPath: "${sidecar}/resources.sh"

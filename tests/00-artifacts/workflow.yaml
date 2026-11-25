@@ -1,0 +1,40 @@
+# TC00: the simplest case. One container template with a native input artifact (tests/00/input.txt) and
+# a native output artifact (tests/00/result.txt) in the default artifact repository, as a scientist would
+# write it for any Kubernetes cluster: nothing about interLink, Slurm or the HPC side.
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: native-00-artifacts-
+  labels:
+    test: native-00
+spec:
+  entrypoint: upper
+  templates:
+  - name: upper
+    inputs:
+      artifacts:
+      - name: data
+        path: /tmp/in/input.txt
+        s3:
+          key: tests/00/input.txt
+    outputs:
+      artifacts:
+      - name: result
+        path: /tmp/out/result.txt
+        archive:
+          none: {}
+        s3:
+          key: tests/00/result.txt
+    container:
+      image: alpine:3.20
+      command: [sh, -c]
+      args:
+      - |
+        echo "main on $(hostname)"
+        mkdir -p /tmp/out
+        tr a-z A-Z </tmp/in/input.txt >/tmp/out/result.txt
+        cat /tmp/out/result.txt
+      resources:
+        limits:
+          cpu: "1"
+          memory: 512Mi

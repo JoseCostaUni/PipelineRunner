@@ -5,9 +5,9 @@
 #   ./testbed up            Stage A: create the login and compute node VMs
 #   ./testbed check         fidelity checks; report in logs/check-<time>.md
 #   ./testbed up-b          Stage B: add 'ulisses' (Kubernetes side + MinIO) using Isabel's scripts
-#   ./testbed trial setup   the user who runs deploy/deucalion as on Ulisses (no root), this repository
-#                           in its home, 'make setup' as that user
-#   ./testbed trial make T  'make T' of deploy/deucalion as that user (ENV_FILE=testbed.env)
+#   ./testbed trial setup   the user who runs the runner as on Ulisses (no root), this repository in its
+#                           home, 'make setup' as that user
+#   ./testbed trial make T  'make T' of the repository's Makefile as that user (SITE=testbed)
 #   ./testbed net dev       compute node WITH internet   (like Deucalion dev-* partitions)
 #   ./testbed net normal    compute node WITHOUT internet (like Deucalion normal-* partitions)
 #   ./testbed net status    show the current mode
@@ -529,14 +529,14 @@ cmd_check() {
 }
 
 # ---------------------------------------------------------------------------- trial
-# The Deucalion scripts (deploy/deucalion) run here as on Ulisses: as a user without root on ulisses
-# (a cluster-admin kubeconfig through a ServiceAccount token, guest/trial-user.sh) and as 'lisa' on the
-# login node, with deploy/deucalion/testbed.env.example as settings.
+# The runner is set up and tested here as on Ulisses: as a user without root on ulisses (a cluster-admin
+# kubeconfig through a ServiceAccount token, guest/trial-user.sh) and as 'lisa' on the login node, with
+# settings/testbed.env.example as settings.
 TRIAL_USER="${TRIAL_USER:-jcosta}"
-trial_make() { # make targets of deploy/deucalion as the trial user, with ENV_FILE=testbed.env
+trial_make() { # targets of the repository's Makefile as the trial user, with SITE=testbed
   local s
   s="$(mktemp)"
-  { printf 'cd ~/PipelineRunner/deploy/deucalion && make'; printf ' %q' "$@"; printf ' ENV_FILE=testbed.env\n'; } >"$s"
+  { printf 'cd ~/PipelineRunner && make'; printf ' %q' "$@"; printf ' SITE=testbed\n'; } >"$s"
   limactl copy "$s" "$(vm ulisses):/tmp/trial-make.sh"; rm -f "$s"
   vsh ulisses chmod 644 /tmp/trial-make.sh   # mktemp's 600 would keep the trial user out
   limactl shell --workdir / "$(vm ulisses)" sudo -u "$TRIAL_USER" -i bash /tmp/trial-make.sh
@@ -550,19 +550,20 @@ cmd_trial() {
       [ -n "$key" ] || die "could not create the trial user on ulisses"
       vsh login sudo -u lisa bash -c "grep -qxF '$key' ~/.ssh/authorized_keys 2>/dev/null || echo '$key' >>~/.ssh/authorized_keys"
       # This repository, as committed or not, without what only lives on the Mac: settings files
-      # (deucalion.env holds real keys), results, the testbed's own state, git.
+      # (deucalion.env holds real keys), results, the Mac's Python environment, the testbed's own
+      # state, git.
       t="$(mktemp)"
-      ( cd "$ZE_DIR" && COPYFILE_DISABLE=1 tar czf "$t" --exclude ./.git --exclude ./deploy/deucalion/results \
+      ( cd "$ZE_DIR" && COPYFILE_DISABLE=1 tar czf "$t" --exclude ./.git --exclude ./results --exclude ./.venv \
           --exclude '*.env' --exclude .DS_Store --exclude ./testbed/cache --exclude ./testbed/state \
-          --exclude ./testbed/logs --exclude ./experiments/reverse-tunnel/results --exclude './*.pdf' . )
+          --exclude ./testbed/logs --exclude './*.pdf' . )
       limactl copy "$t" "$(vm ulisses):/tmp/trial-repo.tgz"; rm -f "$t"
       vsh ulisses sudo bash -c "R=/home/$TRIAL_USER/PipelineRunner; mkdir -p \$R && tar xzf /tmp/trial-repo.tgz -C \$R 2>/dev/null; \
-        [ -f \$R/deploy/deucalion/testbed.env ] || cp \$R/deploy/deucalion/testbed.env.example \$R/deploy/deucalion/testbed.env; \
-        chmod 600 \$R/deploy/deucalion/testbed.env; chown -R $TRIAL_USER: \$R; rm -f /tmp/trial-repo.tgz"
+        [ -f \$R/settings/testbed.env ] || cp \$R/settings/testbed.env.example \$R/settings/testbed.env; \
+        chmod 600 \$R/settings/testbed.env; chown -R $TRIAL_USER: \$R; rm -f /tmp/trial-repo.tgz"
       trial_make setup
       ;;
     make) shift; trial_make "$@" ;;
-    *) die "usage: $0 trial setup | trial make <targets of deploy/deucalion/Makefile>" ;;
+    *) die "usage: $0 trial setup | trial make <targets of the repository's Makefile>" ;;
   esac
 }
 

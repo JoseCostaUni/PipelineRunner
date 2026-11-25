@@ -1,0 +1,4 @@
+# The step wrote a new file to the Global Storage.
+phase: Succeeded
+outputs:
+  tests/03/new-file.txt: This file was created by the compute-write module.

@@ -1,0 +1,30 @@
+# The Global Storage as Argo's default artifact repository in ARGO_NAMESPACE, so workflows use native
+# artifacts with just a key. Its endpoint is the Global Storage's Service name, because the jobs reach
+# it through the tunnel, which maps names, not IP addresses. An existing artifact-repositories
+# ConfigMap is saved first and put back by 'lisa restore'. lisa fills in the Secret's keys.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: artifact-repositories
+  namespace: ${namespace}
+  labels: {app.kubernetes.io/managed-by: lisa-runner}
+  annotations:
+    workflows.argoproj.io/default-artifact-repository: default-v1
+data:
+  default-v1: |
+    s3:
+      bucket: ${bucket}
+      endpoint: ${endpoint}
+      insecure: ${insecure}
+      accessKeySecret: {name: lisa-gs-creds, key: accesskey}
+      secretKeySecret: {name: lisa-gs-creds, key: secretkey}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: lisa-gs-creds
+  namespace: ${namespace}
+  labels: {app.kubernetes.io/managed-by: lisa-runner}
+stringData:
+  accesskey: ""
+  secretkey: ""
