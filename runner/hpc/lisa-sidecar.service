@@ -8,6 +8,12 @@ After=network.target
 [Service]
 Environment=SLURMCONFIGPATH=${sidecar}/SlurmConfig.yaml
 Environment=SHARED_FS=true
+# With IMAGE_MIRROR=on, Singularity converts each new image inside the job, and Slurm kills it if that
+# needs more than the job's memory, which the plugin sets from the pod's limit (--mem in the job script;
+# Deucalion enforces it, ConstrainRAMSpace=yes). So every job asks for all of its node's memory: sbatch
+# takes SBATCH_MEM_PER_NODE over the script's --mem. The node is the job's anyway (--exclusive), and the
+# pods' own limits are then requested, no longer enforced. Without the mirror this line is a comment.
+${mirror_memory}
 ExecStart=${plugin}
 WorkingDirectory=${sidecar}
 Restart=always

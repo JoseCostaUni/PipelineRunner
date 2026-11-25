@@ -52,8 +52,10 @@ def rendered(ctx: Context) -> dict[str, str]:
                             squeue=f["squeue"], sinfo=f["sinfo"], image_prefix=prefix, sockets=s.hpc_path("sock"))
     if s.image_mirror:
         config["SingularityDefaultOptions"].append("--no-https")    # the mirror speaks plain HTTP
+    memory = ("Environment=SBATCH_MEM_PER_NODE=0" if s.image_mirror else
+              "# Environment=SBATCH_MEM_PER_NODE=0   (IMAGE_MIRROR=off: each job asks for its pod's memory)")
     unit = render_text("runner/hpc/lisa-sidecar.service", version=s.il_version, sidecar=sidecar,
-                       plugin=plugin(ctx, f["arch"]))
+                       plugin=plugin(ctx, f["arch"]), mirror_memory=memory)
     gs = global_storage.endpoint_here(ctx)
     api = f"{s.k8s_api_host or ctx.cluster.server[0]}:{s.k8s_api_port or ctx.cluster.server[1]}"
     env = {

@@ -181,6 +181,10 @@ flowchart LR
   job's relay with the job (`proctrack/cgroup`); under `proctrack/linuxproc` (the testbed's until 25 Nov
   2026) a finished job's relay held the address for the next job. Deucalion meets both: it uses
   `proctrack/cgroup`, and `normal-x86` gives every job a whole node anyway (`OverSubscribe=EXCLUSIVE`).
+- **Each job then takes all of its node's memory.** Singularity converts a new image inside the job, and
+  Slurm kills it at the job's memory, which the plugin takes from the pod's limit (TC13 on Deucalion:
+  `OUT_OF_MEMORY` at 256Mi). So with the mirror the sidecar runs with `SBATCH_MEM_PER_NODE=0`: the pods'
+  limits are requested, no longer enforced. On `normal-x86` the node is the job's anyway.
 - **The clean fix is upstream:** interLink could set the image prefix to each pod's own relay address,
   which it already derives from the pod's UID. That removes the fixed address and `--exclusive`.
 - **Status:** off by default until it has run on Deucalion. On the testbed it passed TC00 and TC12,

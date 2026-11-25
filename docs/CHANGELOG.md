@@ -16,6 +16,66 @@ three Lima VMs. Since 24 Nov 2026 `main` has only `reverse`; entries below that 
 
 ---
 
+## 2026-11-25 (evening): the image mirror on Deucalion; with it, every job asks for its node's whole memory
+
+**What happened.** The first Deucalion run with `IMAGE_MIRROR=on` and the user's registry token (run
+`20261125-132221`, `make test T="00 05 12 13"`):
+- **TC00, TC05 and TC12 passed.** The mirror works on Deucalion: `--exclusive` and the fixed relay
+  address under `proctrack/cgroup`, and `busybox:1.37` fetched from Docker Hub by the mirror and
+  converted on a `normal-x86` node. Nodes `cnx019`, `cnx148`, `cnx423`.
+- **TC13 failed by running out of memory.** The mirror had fetched ESA's scanner with the token (its log:
+  "skipping image because it's already synced"; the errors after it are zot retrying a finished sync,
+  as on the testbed). The job's Singularity got the image through the tunnel, then:
+  `while creating squashfs: create command failed: signal: killed`. Slurm's record of the job (2270136):
+  `ReqMem 256M`, batch step `OUT_OF_MEMORY`. Deucalion enforces each job's memory
+  (`ConstrainRAMSpace=yes`, `TaskPlugin=task/cgroup,task/affinity`), the plugin sets it from the pod's
+  limit (TC13: 256Mi), and with the mirror the image's conversion runs inside the job. `busybox` fits;
+  a Python image does not.
+- **The pod then hung** for the test's 30 minutes (the open problem of the afternoon), holding a whole
+  node; `make clean` ended it.
+
+**Options considered** (the user chose the first):
+1. With the mirror, every job asks for all of its node's memory. It costs no more allocation on
+   `normal-x86`, where every job gets a whole node anyway; the pods' memory limits are then requested,
+   no longer enforced.
+2. Convert each image once, in a warm-up job with enough memory, into Singularity's cache in `$HOME`.
+   The limits stay enforced, but the images must be known in advance: the list the mirror removed.
+
+**What changed.**
+- **The sidecar's user service** (`runner/hpc/lisa-sidecar.service`): with `IMAGE_MIRROR=on`,
+  `Environment=SBATCH_MEM_PER_NODE=0`; without it, the same line as a comment.
+- **Why there, and not in the offload's Slurm flags:** the plugin writes our flags
+  (`slurm-job.vk.io/flags`) before its own `--cpus-per-task` and `--mem` in the job script, so a `--mem`
+  of ours would come first and lose. `sbatch` takes its environment over the script's `#SBATCH` lines,
+  and the plugin calls `sbatch` (through the subPath fix) with the sidecar's environment. No wrapper
+  grows.
+- **The test runner releases a workflow still running after its timeout** (`testing/runner.py`). Argo's
+  stop goes through the `wait` container, which waits for a `main` that never started, so such a pod
+  stays Running and its Slurm job keeps its node: on Deucalion a whole one, until `make clean`. Found on
+  the testbed: the afternoon's TC13 pod, stopped and marked Failed, still held `cn` two hours later (job
+  512), so the next test's job (515) waited behind it. After recording the test, the runner now deletes
+  such a workflow's pods (interLink then cancels their jobs) and says so in `diag.txt`.
+
+**Costs.**
+- With the mirror, a pod's memory limit no longer bounds it inside Slurm: it is passed on as a request
+  only. For CNES's stress test, which is about memory, a module could use more than its limit without
+  being killed; the test sets its own load from the same parameter (`memory-size` minus 64 MB).
+- Deucalion's billing of whole-node jobs is still to be confirmed (`billing` on the login node).
+
+**Evidence.**
+- Deucalion run `20261125-132221` and `sacct -j 2270136` (above); `grep -i constrain
+  /etc/slurm/cgroup.conf` and `scontrol show config` on the login node.
+- Testbed, the precedence itself: the same job script with `#SBATCH --mem=256`, submitted plainly (job
+  513: `mem=256M`) and with `SBATCH_MEM_PER_NODE=0` (job 514: `mem=1073M`, all of `cn`).
+- Testbed, `make testbed-test T="12"` with the new unit (run `20261125-143204`): TC12 passed. Its job
+  (515) ran with `mem=1073M`, `MinMemoryNode=0`, though its script says `--mem=256`; the sidecar's unit
+  on the login node has `Environment=SBATCH_MEM_PER_NODE=0`. Its 26 minutes are almost all the wait
+  behind job 512 (above), until that workflow was deleted by hand.
+- `make unit`: 149 passed (new: the unit has the line with the mirror, and not without; a timed-out
+  workflow's pods are deleted).
+
+---
+
 ## 2026-11-25 (afternoon): the testbed on `proctrack/cgroup`; the image mirror reaches public.ecr.aws and ESA's GitLab
 
 **Context.** CNES sent a stress-test pipeline (`lisa-sgs/sys/testing/mockpipelines`,

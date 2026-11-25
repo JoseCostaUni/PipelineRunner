@@ -115,3 +115,23 @@ def test_the_mirror_logs_in_with_the_token_and_restarts_when_it_changes(tmp_path
     stamp = lambda ds: next(d for d in ds if d["kind"] == "Deployment")[  # noqa: E731
         "spec"]["template"]["metadata"]["annotations"]["lisa-runner/configuration"]
     assert stamp(without) != stamp(list(docs.values()))
+
+
+def test_with_the_mirror_every_job_asks_for_its_whole_node_memory(tmp_path):
+    """Singularity converts images inside the job; Slurm would kill it at the pod's memory limit."""
+    active = "\nEnvironment=SBATCH_MEM_PER_NODE=0\n"
+    assert active in sidecar.rendered(context(tmp_path, mirror=True))["lisa-sidecar.service"]
+    assert active not in sidecar.rendered(context(tmp_path, mirror=False))["lisa-sidecar.service"]
+
+
+def test_a_workflow_still_running_after_its_timeout_has_its_pods_deleted(tmp_path):
+    """Its Slurm jobs would otherwise hold their nodes (TC13: a pod whose main never started)."""
+    from lisa.testing import runner
+    ctx = context(tmp_path, mirror=True)
+    deleted = []
+    ctx.cluster.delete = lambda api, kind, name, ns=None: deleted.append((kind, name))
+    t = suite.select(suite.load_all(), ["13"])[0]
+    r = TestRun(t, "native-13-x", {"status": {"phase": "Running"}}, diag="state\n")
+    runner._release(ctx, r, [{"metadata": {"name": "native-13-x"}}])
+    assert deleted == [("Pod", "native-13-x")]
+    assert "deleted its pods (native-13-x)" in r.diag
