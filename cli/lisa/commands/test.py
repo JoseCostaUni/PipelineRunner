@@ -19,6 +19,11 @@ def test(ctx: Context, wanted: list[str], timeout: int = 1800) -> int:
     have = ({"mirror"} | ({"private-registry"} if s.mirror_private_token else set())) if s.image_mirror else set()
     have |= {"cnes"} if cnes.available(s) else set()
     chosen = suite.select(tests, wanted) if wanted else tests
+    lacking = [f"{t.title} needs {FEATURES[t.expect.needs]}" for t in chosen
+               if wanted and t.expect.needs and t.expect.needs not in have]
+    if lacking:                 # named on purpose: say why it cannot run, rather than let it fail
+        raise LisaError("this setup cannot run it: " + "; ".join(lacking) + f". Set it in {s.source.name}, "
+                        "then 'make up'")
     out = RunFolder(ctx, RESULTS)
     if not wanted:              # all: those that need what this setup lacks are skipped
         out.skipped = [f"{t.title} (needs {FEATURES[t.expect.needs]})"

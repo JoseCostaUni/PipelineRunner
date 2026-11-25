@@ -38,7 +38,10 @@ measurement.
 - **`MINIO_SIZE`** (default 50 GiB, was a fixed 20 GiB): the MinIO's `emptyDir` limit.
 - **The report gives Argo's reason** for a workflow that did not succeed (`status.message`), in the
   terminal and in `report.md`. TC21's first run on Deucalion (`20261125-162617`) ended in `Error` after
-  5 s without a single pod, and the report said only that.
+  5 s without a single pod, and the report said only that. The reason: `workflowtemplates.argoproj.io
+  "stress-pipeline" not found`, because `CNES_TEMPLATES` was not set on Ulisses, so `make up` had
+  skipped CNES's templates. `make test` now refuses a test named on purpose whose needs the setup lacks
+  (here `cnes`), and says which setting is missing, before submitting anything.
 
 **Evidence.**
 - Their script against ours, run side by side on the Mac: `idefix.h5`
