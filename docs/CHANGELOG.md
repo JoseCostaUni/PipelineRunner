@@ -5,7 +5,9 @@ entry names the commits, the test runs (folders under `results/`, `testbed/logs/
 `deploy/deucalion/results/` or `experiments/reverse-tunnel/results/`) and the sources that justify the
 decision, so a design choice can be traced back to the problem that caused it.
 
-Entries are kept as they were written: paths in them are those of their time. The restructure of
+Entries are kept as they were written: paths in them are those of their time. The entries of 25 Nov
+2026 are headed by their local time; the commit messages of that day call them by earlier labels
+(morning, late morning, afternoon, evening, night, late night, later still, evening last), in that order. The restructure of
 25 Nov 2026 (first entry) maps the old paths to the new ones, and the tag `before-restructure` holds
 them (`git show before-restructure:<path>`).
 
@@ -16,7 +18,7 @@ three Lima VMs. Since 24 Nov 2026 `main` has only `reverse`; entries below that 
 
 ---
 
-## 2026-11-25 (evening, last): TC21 passes on Deucalion; evidence blanks secrets by value
+## 2026-11-25, 17:25: TC21 passes on Deucalion; evidence blanks secrets by value
 
 **TC21 on Deucalion** (run `20261125-165404`): **passed**, 5 of 5 checks, in 26m56s. CNES's stress
 pipeline, unchanged, end to end with 1 GiB: the ingest from the GlobalStorage (ESA's scanner included),
@@ -46,7 +48,7 @@ Secret data, tokens and base64 forms).
 
 ---
 
-## 2026-11-25 (later still): CNES's pipelines, simpler: their files in `~/cnes`, each test brings what it uses
+## 2026-11-25, 16:40: CNES's pipelines, simpler: their files in `~/cnes`, each test brings what it uses
 
 **Problem.** TC21's first try failed in Argo (`stress-pipeline` not found) because `CNES_TEMPLATES` was
 not set, so `make up` had skipped CNES's step. The user: "I think this is doing a lot no? we should
@@ -89,7 +91,7 @@ by name, and the error naming a missing file).
 
 ---
 
-## 2026-11-25 (late night): TC21, CNES's stress test with asterix.h5 (1 GiB), to time the tunnel; their inputs byte for byte
+## 2026-11-25, 16:00: TC21, CNES's stress test with asterix.h5 (1 GiB), to time the tunnel; their inputs byte for byte
 
 **Context.** The user wants to run CNES's stress test with large inputs (`obelix.h5`, 10 GB) and expects
 datasets of about 500 GB. All data crosses the tunnel (Slurm's I/O forwarding and SSH, between Deucalion
@@ -124,7 +126,7 @@ measurement.
 
 ---
 
-## 2026-11-25 (night): CNES's pipelines run unchanged; TC20, their stress test (branch `test/cnes-stress-test-pipeline`)
+## 2026-11-25, 15:15: CNES's pipelines run unchanged; TC20, their stress test (branch `test/cnes-stress-test-pipeline`)
 
 **Context.** CNES sent a stress-test pipeline (`lisa-sgs/sys/testing/mockpipelines`,
 `workflows/stress-pipeline.yaml`, and their document "StressTest Pipeline", 25 Nov 2026). Its ingest and
@@ -203,7 +205,7 @@ ConfigMaps of their Helm chart. The private image their ingest runs already work
 
 ---
 
-## 2026-11-25 (evening): the image mirror on Deucalion; with it, every job asks for its node's whole memory
+## 2026-11-25, 13:20: the image mirror on Deucalion; with it, every job asks for its node's whole memory
 
 **What happened.** The first Deucalion run with `IMAGE_MIRROR=on` and the user's registry token (run
 `20261125-132221`, `make test T="00 05 12 13"`):
@@ -266,7 +268,7 @@ ConfigMaps of their Helm chart. The private image their ingest runs already work
 
 ---
 
-## 2026-11-25 (afternoon): the testbed on `proctrack/cgroup`; the image mirror reaches public.ecr.aws and ESA's GitLab
+## 2026-11-25, 12:30: the testbed on `proctrack/cgroup`; the image mirror reaches public.ecr.aws and ESA's GitLab
 
 **Context.** CNES sent a stress-test pipeline (`lisa-sgs/sys/testing/mockpipelines`,
 `workflows/stress-pipeline.yaml`). Its ingest and dispatch come from their runner's `common-templates`
@@ -338,7 +340,7 @@ image mirror, with a token of theirs, and to rehearse on the testbed first.
 
 ---
 
-## 2026-11-25 (late morning): the restructured code on Deucalion; Deucalion meets the image mirror's conditions
+## 2026-11-25, 11:40: the restructured code on Deucalion; Deucalion meets the image mirror's conditions
 
 **What happened.** On Ulisses, after `make results` and `make restore` with the old code:
 `make setup` (with the `UV_LINK_MODE=copy` fix; interLink rebuilt into `~/lisa-runner`, a few minutes),
@@ -358,7 +360,7 @@ check's output in `~/PipelineRunner/results/check-*.txt`.
 
 ---
 
-## 2026-11-25 (morning): uv copies packages instead of cloning them (Ulisses)
+## 2026-11-25, 10:30: uv copies packages instead of cloning them (Ulisses)
 
 **Problem.** The first `make setup` of the restructured code on Ulisses stopped before `lisa` ran: uv
 could not put the build dependencies into the environment.
