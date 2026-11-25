@@ -18,6 +18,22 @@ three Lima VMs. Since 24 Nov 2026 `main` has only `reverse`; entries below that 
 
 ---
 
+## 2026-11-25, 17:50: next steps after TC21's measurements; the stress test explained
+
+**What changed** (docs only).
+- **`docs/open-problems.md`:** where the work stands after TC21, and the next steps reordered by what it
+  measured: keep the data inside Deucalion (a LocalStorage next to the compute nodes; the tunnel for
+  control; questions for Deucalion's team), less set-up per pod (the tunnel takes 69 to 99 s in each pod;
+  a pilot job as a design study), data movement kept in the cluster, then what is still unmeasured
+  (several pods at once, `obelix.h5`). New open issues: Bastien's May proposal is the split executor;
+  interLink's logs hold secrets; ESA's names in a public repository.
+- **`docs/operations.md`, "What their stress test does":** CNES's stress pipeline step by step, and what
+  its parameters stress.
+
+**Why.** The user: "it is nice to add this to a MD file ... and add the improvements to the next step".
+
+---
+
 ## 2026-11-25, 17:25: TC21 passes on Deucalion; evidence blanks secrets by value
 
 **TC21 on Deucalion** (run `20261125-165404`): **passed**, 5 of 5 checks, in 26m56s. CNES's stress

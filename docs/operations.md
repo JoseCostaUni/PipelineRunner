@@ -194,6 +194,31 @@ Then submit `stress-pipeline` from Argo's UI in namespace `lisa-jcosta`, or from
 `tests/20-cnes-stress/workflow.yaml` with other `arguments` (`kubectl -n lisa-jcosta create -f <file>`).
 `obelix.h5` (10 GiB) is made with `make cnes INPUTS=obelix`. Scale one parameter at a time (below).
 
+### What their stress test does
+
+CNES's "StressTest Pipeline" (their document of 25 Nov 2026, and `stress-pipeline.yaml`) is not science: it
+loads a DCC (the site that runs pipelines) to see how it copes with CPU, memory, storage and scaling, and it
+goes through the whole data lifecycle. In order:
+
+1. **Ingest:** the chosen input (`idefix.h5` 10 MB, `asterix.h5` 1 GB or `obelix.h5` 10 GB, random bytes)
+   is copied from the GlobalStorage into the DCC's LocalStorage, by five steps of their common templates:
+   a scan of the file for HDF5 references to other files (ESA's scanner), a check of the cache, a copy into
+   the cache, the target created, and a copy from the cache into the pipeline's workspace.
+2. **Iterations of stress modules:** each iteration starts `nb-parallel-modules` modules at once. A module
+   is one pod: its `init` stages the input in to the container's working space; `main` runs `stress-ng`
+   (one CPU worker at 100 % of `nb-cpu`, one memory worker filling `memory-size` less 64 MB) for
+   `module-duration`, then writes `module-ephemeral-data-in-MiB` of random data to its working space and
+   `nb-output-per-module` files of `module-output-size-in-MiB`; its `wait` stages those out to the
+   LocalStorage. After each iteration a one-line Python pod counts it, until `nb-iterations`.
+3. **Final output:** one pod writes a file of `pipeline-output-size-in-MiB` to the LocalStorage.
+4. **Dispatch:** that file is copied back to the GlobalStorage, with its SHA-256 (and registered in LISA's
+   global index where the platform has one; not here).
+
+Their defaults (`asterix.h5`, 3 modules in parallel, 3 iterations, 1 GiB outputs and ephemeral data)
+move about 24 GiB through the tunnel here. TC20 and TC21 keep the stress itself small (0.1 CPU, 256 MB,
+30 s): they test the data path. Raise `nb-cpu`, `memory-size`, `module-duration` and the modules in
+parallel to stress the nodes. What TC21 measured: [results](results.md), "Through the tunnel".
+
 ### What their pipelines need from the platform
 
 What any platform running CNES's pipelines must provide, as found while running their stress test. A future
