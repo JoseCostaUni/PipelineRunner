@@ -1,5 +1,7 @@
 # Architecture: plain Argo workflows on HPC compute nodes without network
 
+![What runs where](diagrams/architecture.png)
+
 ## 1. The problem
 
 On Deucalion the login nodes reach the internet, but the compute nodes of the production partitions

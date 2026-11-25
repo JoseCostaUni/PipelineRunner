@@ -18,6 +18,22 @@ three Lima VMs. Since 24 Nov 2026 `main` has only `reverse`; entries below that 
 
 ---
 
+## 2026-11-25, 18:30: diagrams in Excalidraw
+
+**What changed.** `docs/diagrams/`: three diagrams as Excalidraw scenes, each with a PNG that carries
+the scene (it opens again in Excalidraw): what runs where, CNES's data lifecycle today against the
+proposal for large data, and where TC21's 27 minutes went pod by pod. Shown in the architecture, the
+open problems and the results; the Mermaid diagrams stay until these replace them.
+
+**Why.** The user: the Mermaid diagrams "arent really the best ones (maybe we should use excalidraw
+files)"; these are to edit by hand and to put on the weekly progress slides (Canva).
+
+**Evidence.** The timing diagram's numbers were read from run `20261125-165404` (`TC21/workflow.json`
+and `TC21/logs.txt`), not typed from memory: each pod's duration, its tunnel set-up (69 to 99 s), and the
+transfers already in `docs/results.md`.
+
+---
+
 ## 2026-11-25, 17:50: next steps after TC21's measurements; the stress test explained
 
 **What changed** (docs only).

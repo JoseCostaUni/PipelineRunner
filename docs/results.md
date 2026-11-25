@@ -42,6 +42,8 @@ job to run and starts the `sshd` in it. That took 68 to 84 s per pod on the test
 
 ### Through the tunnel, on Deucalion (TC21, run `20261125-165404`)
 
+![Where TC21's 27 minutes went](diagrams/tc21-time.png)
+
 One run, 1 GiB at each step, one pod at a time; read from the containers' own logs (Argo's executor,
 rclone) and Argo's record of each step:
 

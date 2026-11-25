@@ -20,6 +20,8 @@ Updated the evening of 25 Nov 2026.
 
 ## Next steps, in order
 
+![CNES's data lifecycle today, and the proposal](diagrams/data-lifecycle.png)
+
 1. **Keep the data inside Deucalion (for datasets of hundreds of GB).** Today every stage-in and
    stage-out crosses the tunnel, because the LocalStorage is on Ulisses. CNES's own data lifecycle puts
    the DCC's LocalStorage inside the DCC, next to the compute nodes. So: a LocalStorage (S3) inside
