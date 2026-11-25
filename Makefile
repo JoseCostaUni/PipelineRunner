@@ -8,7 +8,10 @@ SETTINGS ?= settings/$(SITE).env
 LISA_HOME ?= $(HOME)/lisa-runner
 UV_VERSION := 0.13.7
 UV ?= $(shell command -v uv 2>/dev/null || echo $(LISA_HOME)/bin/uv)
-LISA = $(UV) run --frozen --quiet lisa --settings $(SETTINGS)
+# uv copies packages from its cache into .venv instead of cloning or hard-linking them: on Ulisses's home
+# file system cloning fails ("Failed to clone ... Resource temporarily unavailable").
+export UV_LINK_MODE ?= copy
+LISA =$(UV) run --frozen --quiet lisa --settings $(SETTINGS)
 T ?=
 A ?= status
 .DEFAULT_GOAL := help

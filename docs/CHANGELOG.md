@@ -16,6 +16,29 @@ three Lima VMs. Since 24 Nov 2026 `main` has only `reverse`; entries below that 
 
 ---
 
+## 2026-11-25 (later): uv copies packages instead of cloning them (Ulisses)
+
+**Problem.** The first `make setup` of the restructured code on Ulisses stopped before `lisa` ran: uv
+could not put the build dependencies into the environment.
+```
+Failed to install: editables-0.6-py3-none-any.whl (editables==0.6)
+Failed to clone `~/.cache/uv/archive-v0/.../editables/redirector.py` to `~/.cache/uv/builds-v0/...`
+Resource temporarily unavailable (os error 11)
+```
+uv fills an environment by cloning or hard-linking files from its cache, and Ulisses's home file system
+refuses that. The testbed (ext4) and the Mac did not, so the rehearsal could not catch it.
+
+**What changed.** The `Makefile` exports `UV_LINK_MODE=copy` (unless already set), so uv copies the
+files. Every `make` target runs uv through the Makefile, so this covers them all.
+
+**Costs.** The environment takes its full size on disk (`.venv`, about 100 MB) instead of sharing files
+with uv's cache, and the first install is a little slower.
+
+**Evidence.** On the Mac, `UV_LINK_MODE=copy uv sync --frozen --reinstall` rebuilt the environment and
+the project; `make unit`: 137 passed. On Ulisses: to be confirmed by the next `make setup`.
+
+---
+
 ## 2026-11-25: the project restructure: `runner/`, `cli/lisa` in Python, `settings/`, a folder per test, five documents
 
 **Problem.** The user's words: it was "super difficult to actually understand what is the pipeline
