@@ -208,3 +208,20 @@ def test_the_report_gives_argos_reason_when_a_workflow_fails(tmp_path):
     report = (out.path / "report.md").read_text()
     assert 'Argo\'s message: workflowtemplates.argoproj.io "stress-pipeline" not found' in report
     assert TestRun(t, "y", {"status": {"phase": "Succeeded", "message": "x"}}).message == ""
+
+
+def test_progress_shows_each_step_with_its_slurm_job():
+    from lisa.commands.inspect import progress_lines
+    wf = {"metadata": {"name": "native-21-x"}, "status": {"phase": "Running", "progress": "6/10", "nodes": {
+        "a": {"type": "Pod", "name": "native-21-x.ingestion[0].compute-references", "displayName": "compute-references",
+              "phase": "Succeeded", "startedAt": "2026-11-25T16:40:00Z", "finishedAt": "2026-11-25T16:42:05Z"},
+        "b": {"type": "Pod", "name": "native-21-x.iterate-stress.stress(0:0)", "displayName": "stress(0:0)",
+              "phase": "Pending"},
+        "c": {"type": "DAG", "name": "native-21-x", "displayName": "native-21-x"}}}}
+    pods = [{"metadata": {"uid": "u1", "annotations": {
+        "workflows.argoproj.io/node-name": "native-21-x.ingestion[0].compute-references"}}}]
+    lines = progress_lines(wf, pods, {"u1": SlurmJob("2271070", "normal-x86", "cnx081", "COMPLETED")})
+    assert lines[0] == "native-21-x  Running  6/10"
+    assert "16:40:00     2m05s  Succeeded  compute-references  (Slurm 2271070 COMPLETED on cnx081)" in lines[1]
+    assert lines[2].endswith("stress(0:0)  (no Slurm job yet)") and "..." in lines[2]
+    assert len(lines) == 3                    # only pods, not the DAG

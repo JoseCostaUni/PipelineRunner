@@ -265,7 +265,8 @@ ignored (`make check` lists them). On Deucalion the old folders (`.interlink/`, 
 
 ## 7. If something fails
 
-Start with `make status` and `make diag`. interLink's logs are in `~/lisa-runner/log/` (`il-vk.log`,
+Start with `make status` and `make diag`. While a test runs, `make progress` shows each step: its times,
+phase, and the Slurm job that runs it. interLink's logs are in `~/lisa-runner/log/` (`il-vk.log`,
 `il-api.log`, `il-tunnel.log`); `make login` opens a shell on the login node, in `HPC_PROJECT_ROOT/runner`.
 
 | Symptom | What to look at |

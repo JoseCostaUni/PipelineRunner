@@ -59,6 +59,9 @@ status: uv ## What runs on both sides
 diag: uv ## interLink's processes and logs, the shadow pods
 	$(LISA) diag
 
+progress: uv ## The workflows running: each step, its times, phase and Slurm job (watch -n 30 make -s progress)
+	$(LISA) progress
+
 down: uv ## Offload off and interLink stopped (the sidecar keeps running)
 	$(LISA) down
 
@@ -134,6 +137,6 @@ lint: uv ## ruff on cli/, shellcheck on the shell scripts if installed
 unit: uv ## The tool's own tests (cli/tests): no cluster needed
 	$(UV) run --frozen pytest -q
 
-.PHONY: help uv settings setup check up test evidence restore results status diag down clean sync hpc login \
+.PHONY: help uv settings setup check up test evidence restore results status diag progress down clean sync hpc login \
         minio minio-off mirror mirror-off cnes testbed-init testbed-vms testbed-test testbed testbed-check \
         testbed-start testbed-stop testbed-status testbed-clean testbed-destroy testbed-shell testbed-net lint unit

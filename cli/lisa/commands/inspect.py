@@ -1,5 +1,6 @@
 """Looking without changing: check (both sides and a compute node), status, diag, a shell on the login node."""
 import shutil
+from datetime import UTC, datetime
 
 from .. import LisaError
 from ..adapters import web
@@ -117,3 +118,47 @@ def diag(ctx: Context) -> None:
 
 def login(ctx: Context) -> None:
     ctx.login.shell(ctx.settings.hpc_path("runner"))
+
+
+def progress(ctx: Context) -> None:
+    """The workflows running in ARGO_NAMESPACE (or the last one): each step's pod, when it started and
+    ended, its phase, and the Slurm job that ran it on the HPC side."""
+    ns = ctx.settings.namespace
+    wfs = sorted(ctx.cluster.list(*argo.WORKFLOW, ns), key=lambda w: w["metadata"]["creationTimestamp"])
+    running = [w for w in wfs if (w.get("status") or {}).get("phase") in (None, "", "Pending", "Running")]
+    if not wfs:
+        ctx.say(f"no workflow in {ns}")
+        return
+    pods = ctx.cluster.list("v1", "Pod", ns)
+    jobs = sidecar.jobs(ctx)
+    for w in running or wfs[-1:]:
+        for line in progress_lines(w, pods, jobs):
+            ctx.say(line)
+
+
+def progress_lines(workflow: dict, pods: list[dict], jobs: dict) -> list[str]:
+    """One workflow's steps, as 'progress' prints them (a pure function, for the tests)."""
+    s = workflow.get("status") or {}
+    uid = {p["metadata"].get("annotations", {}).get("workflows.argoproj.io/node-name"): p["metadata"]["uid"]
+           for p in pods}
+    out = [f"{workflow['metadata']['name']}  {s.get('phase') or 'Pending'}  {s.get('progress', '')}"
+           + (f"  {s['message']}" if s.get("message") else "")]
+    for n in sorted((n for n in (s.get("nodes") or {}).values() if n.get("type") == "Pod"),
+                    key=lambda n: n.get("startedAt") or "~"):
+        start, end = n.get("startedAt") or "", n.get("finishedAt") or ""
+        took = _seconds(start, end)
+        job = jobs.get(uid.get(n.get("name")))
+        slurm = f"Slurm {job.id} {job.state} on {job.nodes}" if job else "no Slurm job yet"
+        out.append(f"   {start[11:19] or '--:--:--'}  {took:>8}  {n.get('phase', ''):<9}  "
+                   f"{n.get('displayName', '')}  ({slurm})")
+    return out
+
+
+def _seconds(start: str, end: str) -> str:
+    """How long a step took, or has been running ('...' when it has not started)."""
+    if not start:
+        return "..."
+    t0 = datetime.fromisoformat(start.replace("Z", "+00:00"))
+    t1 = datetime.fromisoformat(end.replace("Z", "+00:00")) if end else datetime.now(UTC)
+    m, sec = divmod(int((t1 - t0).total_seconds()), 60)
+    return f"{m}m{sec:02d}s" + ("" if end else "+")

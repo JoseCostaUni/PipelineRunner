@@ -47,6 +47,11 @@ place.
   the HPC side, bandwidth to the LocalStorage). The user asked for it as the requirements a future
   interface would rely on.
 
+- **`make progress`:** the workflows running in the namespace (or the last one): each step's pod, when it
+  started, how long it took or has been running, its phase, and the Slurm job that runs it (state,
+  node). Asked for while TC21 ran on Deucalion: following it took `kubectl` and a Python one-liner that a
+  paste broke. `watch -n 30 make -s progress` follows it.
+
 **Costs.** Their files must still be copied to `~/cnes` on Ulisses once.
 
 **Evidence.** `make unit`: 169 passed (new: `cnes:` in `expect.yaml`; templates from `CNES_DIR`, all or

@@ -20,6 +20,7 @@ COMMANDS = {
     "evidence": "configuration, versions, logs and Slurm's record of a run (default: the last)",
     "status": "what runs on both sides",
     "diag": "interLink's processes and logs, the shadow pods and their logs",
+    "progress": "the workflows running: each step, its times and phase, and the Slurm job that runs it",
     "down": "offload off, interLink stopped, the tunnel's credentials deleted",
     "clean": "delete the test workflows (interLink then removes their job folders)",
     "restore": "clean, down, the sidecar stopped, the virtual node deleted",
@@ -59,7 +60,7 @@ def run(ctx: Context, a: argparse.Namespace) -> int:
             getattr(lifecycle, a.command)(ctx)
         case "check":
             inspect.check(ctx)
-        case "status" | "diag" | "login":
+        case "status" | "diag" | "login" | "progress":
             getattr(inspect, a.command)(ctx)
         case "test":
             return test.test(ctx, a.tests, a.timeout)
