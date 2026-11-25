@@ -6,7 +6,7 @@ import platform
 import shutil
 import time
 
-from .. import LisaError
+from .. import LisaError, redact
 from ..adapters import web
 from ..adapters.processes import run
 from ..context import Context
@@ -184,7 +184,7 @@ def diagnostics(ctx: Context) -> str:
         ns, name = x["metadata"]["namespace"], x["metadata"]["name"]
         for c in x["spec"]["containers"]:
             out += [f"== logs {ns}/{name} {c['name']}", ctx.cluster.pod_log(ns, name, c["name"], tail=40)]
-    return "\n".join(out) + "\n"
+    return redact.text("\n".join(out) + "\n", s)         # interLink's logs hold pods' secrets
 
 
 def versions(ctx: Context) -> str:

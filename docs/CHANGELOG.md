@@ -16,6 +16,36 @@ three Lima VMs. Since 24 Nov 2026 `main` has only `reverse`; entries below that 
 
 ---
 
+## 2026-11-25 (evening, last): TC21 passes on Deucalion; evidence blanks secrets by value
+
+**TC21 on Deucalion** (run `20261125-165404`): **passed**, 5 of 5 checks, in 26m56s. CNES's stress
+pipeline, unchanged, end to end with 1 GiB: the ingest from the GlobalStorage (ESA's scanner included),
+one stress module, the final output and the dispatch back to the GlobalStorage. 9 step pods, each a Slurm
+job in `normal-x86` (nodes `cnx013`, `cnx087`, `cnx395`, `cnx396`). `make test` installed their two
+templates from `~/cnes` and generated `asterix.h5` with CNES's bytes (sha256
+`f055ec1e8aabf6fe6de35fc04d746e50674be1412ad2b4c2fdcba45a78c48ce8`, as their script makes it). The time per
+transfer is still to be read from its logs.
+
+**Problem.** `make evidence` for that run stopped: "the Global Storage secret key found in the evidence:
+removed it, nothing kept". The check did its job. The cause: CNES's ingest and dispatch take the storage
+keys into their containers' environment (`secretKeyRef` to `lisa-gs-creds`, for aws-cli and rclone), and
+interLink's verbose logs record a pod's environment with those values resolved, in plain text. Our tests
+never did that; the blanking covered Secret data (base64) and tokens only.
+
+**What changed.** `cli/lisa/redact.py`: the known secrets (the Global Storage secret key and the registry
+token, plain and in base64; the access key in base64) are blanked by value, besides Secret data and
+tokens by shape. Applied to interLink's logs and to everything from the login node in the evidence, and to
+`diag.txt`, which holds the end of interLink's logs. The leak check still runs after, as before.
+
+**Open point.** interLink's own logs in `~/lisa-runner/log` keep those values (private files, mode 600).
+Pods that take secrets into their environment are a reason to lower interLink's log level once trials
+are over.
+
+**Evidence.** `make unit`: 172 passed (new: a pod's environment with the secret resolved, as it leaked;
+Secret data, tokens and base64 forms).
+
+---
+
 ## 2026-11-25 (later still): CNES's pipelines, simpler: their files in `~/cnes`, each test brings what it uses
 
 **Problem.** TC21's first try failed in Argo (`stress-pipeline` not found) because `CNES_TEMPLATES` was

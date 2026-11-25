@@ -28,6 +28,7 @@ was for.
 | `20261125-125806` and the run before it | testbed, `proctrack/cgroup` | image mirror on, with a registry token | TC00, **TC05** (failed under `proctrack/linuxproc`) and TC12 pass. TC13 fails on the testbed's architecture: ESA's scanner image was fetched with the token, but exists for `linux/amd64` only, and the testbed's compute node is `aarch64` |
 | `20261125-132221` | **Deucalion**, `normal-x86` | image mirror on, with a registry token | **TC00, TC05 and TC12 pass with the mirror** (`cnx019`, `cnx148`, `cnx423`). TC13: ESA's image fetched with the token, then the job ran out of memory converting it (`ReqMem 256M`, `OUT_OF_MEMORY`), and hung until the 30-minute timeout. Fixed in the evening: with the mirror every job asks for its node's whole memory |
 | `20261125-150457` | **Deucalion**, `normal-x86` | image mirror on, a registry token, jobs with their node's whole memory | **TC13 passes** (2m50s, `cnx080`): ESA's private scanner image, fetched by the mirror with the token, converted and run on the compute node |
+| `20261125-165404` | **Deucalion**, `normal-x86` | CNES's stress pipeline, unchanged (TC21), mirror and token | **TC21 passes** (26m56s): `asterix.h5` (1 GiB, CNES's bytes) through ingest, one stress module, output and dispatch; 9 step pods on `cnx013`, `cnx087`, `cnx395`, `cnx396` |
 
 ## Time
 

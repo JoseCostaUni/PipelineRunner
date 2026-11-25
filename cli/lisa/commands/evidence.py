@@ -2,7 +2,6 @@
 results/<run>/evidence/: both sides' configuration, the versions (interLink's build commit, the plugin's
 checksum against the release's), interLink's and the sidecar's logs of the run's time, and Slurm's
 record of its jobs. Every secret is blanked, and the folder is checked for any left before it is kept."""
-import base64
 import io
 import re
 import shutil
@@ -10,13 +9,11 @@ import tarfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from .. import LisaError
+from .. import LisaError, redact
 from ..components import argo, interlink, sidecar
 from ..context import Context
 from ..paths import RESULTS
 
-TOKEN = re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
-SECRET_DATA = re.compile(r'(\\*"data\\*":\{)[^}]*')
 README = """Evidence for run {run} (collected {now} by 'lisa evidence'). Window: {t0} to {t1} UTC.
 Secrets were blanked (Secret data, service-account tokens) and the folder checked for the Global Storage keys.
 
@@ -57,13 +54,16 @@ def evidence(ctx: Context, run: str | None) -> None:
         if log.exists():
             window = (t0.strftime(fmt), t1.strftime(fmt))
             lines = [x for x in log.read_text(errors="replace").splitlines() if window[0] <= _time(x) <= window[1]]
-            (e / "kubernetes" / log.name).write_text("".join(_blank(x) + "\n" for x in lines))
+            (e / "kubernetes" / log.name).write_text(redact.text("".join(x + "\n" for x in lines), ctx.settings))
     try:
         data = sidecar.evidence(ctx, started.strftime(fmt), t0.strftime(fmt), t1.strftime(fmt))
         with tarfile.open(fileobj=io.BytesIO(data)) as tar:
             tar.extractall(e, **({"filter": "data"} if hasattr(tarfile, "data_filter") else {}))
     except LisaError as err:
         ctx.console.warn(f"could not collect the login node's part: {err}")
+    for p in (e / "login-node").rglob("*"):     # the plugin's log records pods' environments too
+        if p.is_file():
+            p.write_text(redact.text(p.read_text(errors="replace"), ctx.settings))
     leaks = _leaks(ctx, e)
     if leaks:
         shutil.rmtree(e)
@@ -85,17 +85,9 @@ def _run_folder(run: str | None) -> Path:
     return runs[-1]
 
 
-def _b64(value: str) -> str:
-    return base64.b64encode(value.encode()).decode()
-
-
 def _time(line: str) -> str:
     m = re.search(r'time="([^"]{19})', line)
     return m[1] if m else ""
-
-
-def _blank(line: str) -> str:
-    return TOKEN.sub("<token>", SECRET_DATA.sub(r"\1<redacted>", line))
 
 
 def _leaks(ctx: Context, folder: Path) -> str:
@@ -105,9 +97,9 @@ def _leaks(ctx: Context, folder: Path) -> str:
     s = ctx.settings
     found = []
     text = "\n".join(p.read_text(errors="replace") for p in folder.rglob("*") if p.is_file())
-    if s.gs_secret_key and (s.gs_secret_key in text or _b64(s.gs_secret_key) in text):
+    if s.gs_secret_key and (s.gs_secret_key in text or redact.b64(s.gs_secret_key) in text):
         found.append("the Global Storage secret key")
-    if s.gs_access_key and _b64(s.gs_access_key) in text:
+    if s.gs_access_key and redact.b64(s.gs_access_key) in text:
         found.append("the access key in base64")
     if "eyJhbGciOi" in text:
         found.append("a token")
