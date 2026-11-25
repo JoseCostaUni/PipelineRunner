@@ -48,6 +48,8 @@ class RunFolder:
         ok = sum(c.passed for c in r.checks)
         say(f"TC{r.test.id}  {'PASS' if r.passed else 'FAIL'}  {r.phase} in {r.seconds // 60}m{r.seconds % 60:02d}s, "
             f"checks {ok}/{len(r.checks)}  ({r.workflow_name or r.error})")
+        if r.message:
+            say(f"      Argo: {r.message}")
         for c in r.checks:
             say(f"      {'PASS' if c.passed else 'FAIL'}  {c.kind} {c.what}: expected {c.expected}, got {c.got}")
 
@@ -78,7 +80,7 @@ class RunFolder:
         return {"run": self.id, "settings": self.ctx.settings.source.name, "summary": self.summary(),
                 "skipped": self.skipped,
                 "tests": [{"test": r.test.title, "passed": r.passed, "phase": r.phase, "seconds": r.seconds,
-                           "workflow": r.workflow_name, "error": r.error,
+                           "workflow": r.workflow_name, "error": r.error, "message": r.message,
                            "checks": [asdict(c) for c in r.checks],
                            "pods": [{"name": p.name, "node": p.node, "slurm": asdict(p.slurm) if p.slurm else None}
                                     for p in r.pods]} for r in self.runs]}
@@ -101,6 +103,8 @@ class RunFolder:
         for r in self.runs:
             out += ["", f"## {r.test.title}: {'PASS' if r.passed else 'FAIL'}", ""]
             out.append(f"Workflow `{r.workflow_name}`, {r.phase} after {r.seconds} s." if r.workflow_name else r.error)
+            if r.message:
+                out += ["", f"Argo's message: {_cell(r.message)}"]
             out += ["", "| | Check | Expected | Got |", "|---|---|---|---|"]
             out += [f"| {'PASS' if c.passed else '**FAIL**'} | {c.kind} {_cell(c.what)} | {_cell(c.expected)} | "
                     f"{_cell(c.got)} |" for c in r.checks]

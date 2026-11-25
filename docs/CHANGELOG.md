@@ -36,6 +36,9 @@ measurement.
   (default `idefix asterix`; `obelix` on request). TC20's earlier `idefix.h5` was random bytes of ours.
   numpy becomes a dependency.
 - **`MINIO_SIZE`** (default 50 GiB, was a fixed 20 GiB): the MinIO's `emptyDir` limit.
+- **The report gives Argo's reason** for a workflow that did not succeed (`status.message`), in the
+  terminal and in `report.md`. TC21's first run on Deucalion (`20261125-162617`) ended in `Error` after
+  5 s without a single pod, and the report said only that.
 
 **Evidence.**
 - Their script against ours, run side by side on the Mac: `idefix.h5`

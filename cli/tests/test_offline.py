@@ -189,3 +189,16 @@ def test_stress_inputs_are_cnes_bytes(tmp_path):
     assert len(data) == 1 << 20 and sha == hashlib.sha256(data).hexdigest()
     assert cnes.generate(tmp_path / "y.h5", 1 << 20) == sha          # the same bytes every time
     assert max(data) == 254                                            # randint(0, 255): 255 never occurs
+
+
+def test_the_report_gives_argos_reason_when_a_workflow_fails(tmp_path):
+    """TC21's first run ended in Error after 5 s with no pod: the reason is Argo's message."""
+    ctx = context(tmp_path, mirror=True)
+    t = suite.select(suite.load_all(), ["21"])[0]
+    wf = {"status": {"phase": "Error", "message": "workflowtemplates.argoproj.io \"stress-pipeline\" not found"}}
+    r = TestRun(t, "native-21-x", wf, 5, [], [])
+    out = RunFolder(ctx, tmp_path / "results")
+    out.add(r)
+    report = (out.path / "report.md").read_text()
+    assert 'Argo\'s message: workflowtemplates.argoproj.io "stress-pipeline" not found' in report
+    assert TestRun(t, "y", {"status": {"phase": "Succeeded", "message": "x"}}).message == ""

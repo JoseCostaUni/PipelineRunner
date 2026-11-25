@@ -32,6 +32,12 @@ class TestRun:
         return self.workflow.get("status", {}).get("phase", "not run")
 
     @property
+    def message(self) -> str:
+        """Argo's reason when the workflow did not succeed (e.g. a template or parameter it could not
+        resolve, which ends it in Error before any pod)."""
+        return self.workflow.get("status", {}).get("message", "") if self.phase != "Succeeded" else ""
+
+    @property
     def passed(self) -> bool:
         return not self.error and bool(self.checks) and all(c.passed for c in self.checks)
 
