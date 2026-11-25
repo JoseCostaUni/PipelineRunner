@@ -1,0 +1,4 @@
+# The step read its input file and wrote it back transformed, in upper case.
+phase: Succeeded
+outputs:
+  tests/04/write-file.txt: THIS TEXT IS IN LOWER CASE.

@@ -1,0 +1,50 @@
+# Not part of the runner: a stand-in Global Storage for trials, where none is reachable.
+# GS_ENDPOINT=cluster: a MinIO of ours in ARGO_NAMESPACE as the Global Storage, under the Service name
+# GS_SERVICE. The Kubernetes side reaches it at the Service's cluster IP, the jobs through the tunnel
+# under its name. Its data is in an emptyDir of at most MINIO_SIZE on the node's disk, lost when the pod
+# restarts: enough for trials, as the tests put back their own inputs before every run and 'make up' the
+# stress test's. 'lisa minio off' removes it. MinIO stopped
+# publishing free images in October 2025, hence pgsty's build (MINIO_IMAGE). lisa fills in the keys
+# (GS_ACCESS_KEY, GS_SECRET_KEY).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: lisa-minio-root
+  namespace: ${namespace}
+  labels: {app.kubernetes.io/managed-by: lisa-runner}
+stringData:
+  MINIO_ROOT_USER: ""
+  MINIO_ROOT_PASSWORD: ""
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lisa-minio
+  namespace: ${namespace}
+  labels: {app: lisa-minio, app.kubernetes.io/managed-by: lisa-runner}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: lisa-minio}}
+  template:
+    metadata:
+      labels: {app: lisa-minio}
+    spec:
+      containers:
+      - name: minio
+        image: ${image}
+        args: ["server", "/data", "--console-address", ":9001"]
+        envFrom: [{secretRef: {name: lisa-minio-root}}]
+        ports: [{containerPort: 9000}]
+        readinessProbe: {httpGet: {path: /minio/health/ready, port: 9000}, periodSeconds: 5}
+        volumeMounts: [{name: data, mountPath: /data}]
+      volumes: [{name: data, emptyDir: {sizeLimit: "${size}"}}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${service}
+  namespace: ${namespace}
+  labels: {app: lisa-minio, app.kubernetes.io/managed-by: lisa-runner}
+spec:
+  selector: {app: lisa-minio}
+  ports: [{name: s3, port: 9000, targetPort: 9000}]

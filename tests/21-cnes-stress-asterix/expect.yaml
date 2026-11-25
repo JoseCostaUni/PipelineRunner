@@ -1,0 +1,11 @@
+# As TC20: the whole pipeline succeeded, and its ingest, final output and dispatch ran (step names of
+# CNES's templates), now with 1 GiB at each step.
+phase: Succeeded
+needs: cnes
+cnes:                               # provided by 'make test' just before it runs
+  templates: [CommonTemplates.yaml, stress-pipeline.yaml]   # in CNES_DIR (~/cnes)
+  inputs: [asterix]
+steps:
+  compute-references: Succeeded
+  output-file-creation: Succeeded
+  TransferData: Succeeded

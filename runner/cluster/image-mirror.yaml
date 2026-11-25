@@ -1,0 +1,93 @@
+# The image mirror (IMAGE_MIRROR=on; 'lisa up' starts it, 'lisa mirror off' removes it): a registry in
+# ARGO_NAMESPACE, zot, which fetches images on demand from their registries and keeps them. A job reaches
+# it through the reverse tunnel, as image-mirror.<namespace>.svc.cluster.local:5000. Plain HTTP: it is
+# reached only inside the cluster and through the tunnel. Its data is in an emptyDir, lost when the pod
+# restarts (a cache: it fetches again).
+#
+# Where an image comes from, by the first part of its name (one rule each, in order):
+#   docker.io/...  quay.io/...  ghcr.io/...  public.ecr.aws/...   from that registry, anonymously
+#   ${private_name}/...   from the private registry ${private_registry} (MIRROR_PRIVATE_REGISTRY), with the
+#                  credentials in the Secret image-mirror-credentials (MIRROR_PRIVATE_USER and _TOKEN).
+#                  Named without its port, because an image name behind the mirror's own address
+#                  cannot hold a second one
+#   anything else  from Docker Hub, as Kubernetes reads a bare name (alpine:3.20 is library/alpine)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: image-mirror
+  namespace: ${namespace}
+  labels: {app: image-mirror, app.kubernetes.io/managed-by: lisa-runner}
+data:
+  config.json: |
+    {
+      "distSpecVersion": "1.1.1",
+      "storage": {"rootDirectory": "/var/lib/registry"},
+      "http": {"address": "0.0.0.0", "port": "5000", "compat": ["docker2s2"]},
+      "log": {"level": "info"},
+      "extensions": {"sync": {"enable": true, "registries": [
+        {"urls": ["https://registry-1.docker.io"], "onDemand": true, "tlsVerify": true,
+         "content": [{"prefix": "**", "destination": "/docker.io"}]},
+        {"urls": ["https://quay.io"], "onDemand": true, "tlsVerify": true,
+         "content": [{"prefix": "**", "destination": "/quay.io"}]},
+        {"urls": ["https://ghcr.io"], "onDemand": true, "tlsVerify": true,
+         "content": [{"prefix": "**", "destination": "/ghcr.io"}]},
+        {"urls": ["https://public.ecr.aws"], "onDemand": true, "tlsVerify": true,
+         "content": [{"prefix": "**", "destination": "/public.ecr.aws"}]},
+        {"urls": ["https://${private_registry}"], "onDemand": true, "tlsVerify": true,
+         "content": [{"prefix": "**", "destination": "/${private_name}"}]},
+        {"urls": ["https://registry-1.docker.io"], "onDemand": true, "tlsVerify": true,
+         "content": [{"prefix": "**"}]}
+      ], "credentialsFile": "/etc/zot-credentials/credentials.json"}}
+    }
+---
+# Credentials for the private registry, in zot's format ({"<host:port>": {"username", "password"}}); an
+# empty object without MIRROR_PRIVATE_TOKEN. lisa fills it in from the settings.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: image-mirror-credentials
+  namespace: ${namespace}
+  labels: {app: image-mirror, app.kubernetes.io/managed-by: lisa-runner}
+stringData:
+  credentials.json: "{}"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: image-mirror
+  namespace: ${namespace}
+  labels: {app: image-mirror, app.kubernetes.io/managed-by: lisa-runner}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: image-mirror}}
+  template:
+    metadata:
+      labels: {app: image-mirror}
+      # zot reads its configuration and credentials at start: lisa sets this to a hash of both, so a
+      # change restarts it.
+      annotations: {lisa-runner/configuration: ""}
+    spec:
+      containers:
+      - name: zot
+        image: ghcr.io/project-zot/zot:v2.1.11
+        args: [serve, /etc/zot/config.json]
+        ports: [{containerPort: 5000}]
+        readinessProbe: {httpGet: {path: /v2/, port: 5000}, periodSeconds: 5}
+        volumeMounts:
+        - {name: config, mountPath: /etc/zot}
+        - {name: credentials, mountPath: /etc/zot-credentials, readOnly: true}
+        - {name: data, mountPath: /var/lib/registry}
+      volumes:
+      - {name: config, configMap: {name: image-mirror}}
+      - {name: credentials, secret: {secretName: image-mirror-credentials}}
+      - {name: data, emptyDir: {sizeLimit: 30Gi}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: image-mirror
+  namespace: ${namespace}
+  labels: {app: image-mirror, app.kubernetes.io/managed-by: lisa-runner}
+spec:
+  selector: {app: image-mirror}
+  ports: [{name: registry, port: 5000, targetPort: 5000}]

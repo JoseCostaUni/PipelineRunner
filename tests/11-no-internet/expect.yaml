@@ -1,0 +1,5 @@
+# The step's own record, from inside its container on the compute node: no connection to the internet
+# opened.
+phase: Succeeded
+outputs:
+  tests/11/network.txt: "internet: blocked"

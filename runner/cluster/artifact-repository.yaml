@@ -1,0 +1,49 @@
+# Argo's default artifact repository in ARGO_NAMESPACE, in the layout of CNES's PipelineRunner (their
+# Helm chart, lisa-sgs/sys/components/pipelinerunner, configmaps/artifact-repositories.yaml), so their
+# pipelines and common templates find what they read here. Two storages, in CNES's terms:
+#   LocalStorage    the default artifact repository, what this repository calls the Global Storage
+#                   (Isabel Moutinho's term): GS_BUCKET at GS_ENDPOINT
+#   GlobalStorage   the storage pipelines ingest from and dispatch to: here the same endpoint, buckets
+#                   named GS_GLOBAL_PREFIX + <name> (CNES's single-node setup does the same)
+# Both are reached by their Service name, because the jobs reach them through the tunnel, which maps
+# names, not IP addresses. An existing artifact-repositories ConfigMap is saved first and put back by
+# 'lisa restore'. The label lets Argo read the keys as parameters (configMapKeyRef). lisa fills in the
+# Secret's keys.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: artifact-repositories
+  namespace: ${namespace}
+  labels:
+    app.kubernetes.io/managed-by: lisa-runner
+    workflows.argoproj.io/configmap-type: Parameter
+  annotations:
+    workflows.argoproj.io/default-artifact-repository: localstorage
+data:
+  localstorage: |
+    s3:
+      bucket: ${bucket}
+      endpoint: ${endpoint}
+      insecure: ${insecure}
+      accessKeySecret: {name: lisa-gs-creds, key: accesskey}
+      secretKeySecret: {name: lisa-gs-creds, key: secretkey}
+  # The same, as single keys, for templates that run their own S3 clients (aws-cli, rclone).
+  localstorage-s3-bucket: "${bucket}"
+  localstorage-s3-endpoint: "${endpoint}"
+  localstorage-s3-protocol: "${protocol}"
+  localstorage-s3-secretname: lisa-gs-creds
+  localstorage-globalstoragecache-s3-bucket: "${cache_bucket}"
+  globalstorage-s3-endpoint: "${endpoint}"
+  globalstorage-s3-protocol: "${protocol}"
+  globalstorage-s3-secretname: lisa-gs-creds
+  globalstorage-s3-bucket-prefix: "${global_prefix}"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: lisa-gs-creds
+  namespace: ${namespace}
+  labels: {app.kubernetes.io/managed-by: lisa-runner}
+stringData:
+  accesskey: ""
+  secretkey: ""

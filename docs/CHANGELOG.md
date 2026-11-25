@@ -1,14 +1,573 @@
 # Changelog and decision log
 
 What changed in this repository, **why**, what it cost, and the evidence for it. Newest first. Each
-entry names the commits, the test runs (folders under `deploy/deucalion/results/`, `testbed/logs/` or
-`experiments/reverse-tunnel/results/`) and the sources that justify the decision, so a design choice
-can be traced back to the problem that caused it.
+entry names the commits, the test runs (folders under `results/`, `testbed/logs/`, and before 25 Nov 2026
+`deploy/deucalion/results/` or `experiments/reverse-tunnel/results/`) and the sources that justify the
+decision, so a design choice can be traced back to the problem that caused it.
+
+Entries are kept as they were written: paths in them are those of their time. The entries of 25 Nov
+2026 are headed by their local time; the commit messages of that day call them by earlier labels
+(morning, late morning, afternoon, evening, night, late night, later still, evening last), in that order. The restructure of
+25 Nov 2026 (first entry) maps the old paths to the new ones, and the tag `before-restructure` holds
+them (`git show before-restructure:<path>`).
 
 Terms: **split** = interLink 0.6.1 with the split executor (Argo's `init` and `wait` on the login
 node, only `main` in the Slurm job). **reverse** = interLink 0.6.3 with the reverse tunnel of its
 SSH shadow (the whole pod in the Slurm job). **Testbed** = `testbed/`, a small copy of Deucalion on
 three Lima VMs. Since 24 Nov 2026 `main` has only `reverse`; entries below that one describe both.
+
+---
+
+## 2026-11-25, 18:30: diagrams in Excalidraw
+
+**What changed.** `docs/diagrams/`: three diagrams as Excalidraw scenes, each with a PNG that carries
+the scene (it opens again in Excalidraw): what runs where, CNES's data lifecycle today against the
+proposal for large data, and where TC21's 27 minutes went pod by pod. Shown in the architecture, the
+open problems and the results; the Mermaid diagrams stay until these replace them.
+
+**Why.** The user: the Mermaid diagrams "arent really the best ones (maybe we should use excalidraw
+files)"; these are to edit by hand and to put on the weekly progress slides (Canva).
+
+**Evidence.** The timing diagram's numbers were read from run `20261125-165404` (`TC21/workflow.json`
+and `TC21/logs.txt`), not typed from memory: each pod's duration, its tunnel set-up (69 to 99 s), and the
+transfers already in `docs/results.md`.
+
+---
+
+## 2026-11-25, 17:50: next steps after TC21's measurements; the stress test explained
+
+**What changed** (docs only).
+- **`docs/open-problems.md`:** where the work stands after TC21, and the next steps reordered by what it
+  measured: keep the data inside Deucalion (a LocalStorage next to the compute nodes; the tunnel for
+  control; questions for Deucalion's team), less set-up per pod (the tunnel takes 69 to 99 s in each pod;
+  a pilot job as a design study), data movement kept in the cluster, then what is still unmeasured
+  (several pods at once, `obelix.h5`). New open issues: Bastien's May proposal is the split executor;
+  interLink's logs hold secrets; ESA's names in a public repository.
+- **`docs/operations.md`, "What their stress test does":** CNES's stress pipeline step by step, and what
+  its parameters stress.
+
+**Why.** The user: "it is nice to add this to a MD file ... and add the improvements to the next step".
+
+---
+
+## 2026-11-25, 17:25: TC21 passes on Deucalion; evidence blanks secrets by value
+
+**TC21 on Deucalion** (run `20261125-165404`): **passed**, 5 of 5 checks, in 26m56s. CNES's stress
+pipeline, unchanged, end to end with 1 GiB: the ingest from the GlobalStorage (ESA's scanner included),
+one stress module, the final output and the dispatch back to the GlobalStorage. 9 step pods, each a Slurm
+job in `normal-x86` (nodes `cnx013`, `cnx087`, `cnx395`, `cnx396`). `make test` installed their two
+templates from `~/cnes` and generated `asterix.h5` with CNES's bytes (sha256
+`f055ec1e8aabf6fe6de35fc04d746e50674be1412ad2b4c2fdcba45a78c48ce8`, as their script makes it). The time per
+transfer, read later from its logs (`results.tgz`; table in `docs/results.md`): 42 to 73 MiB/s through
+the tunnel for a single pod's transfers (rclone's ingest copy 51 MiB/s, dispatch 55 MiB/s; Argo's stage-out
+42 MiB/s, final output 73 MiB/s); the tunnel took 69 to 99 s to come up in each of the nine pods, about 13
+of the 27 minutes, against about 2.5 minutes of data.
+
+**Problem.** `make evidence` for that run stopped: "the Global Storage secret key found in the evidence:
+removed it, nothing kept". The check did its job. The cause: CNES's ingest and dispatch take the storage
+keys into their containers' environment (`secretKeyRef` to `lisa-gs-creds`, for aws-cli and rclone), and
+interLink's verbose logs record a pod's environment with those values resolved, in plain text. Our tests
+never did that; the blanking covered Secret data (base64) and tokens only.
+
+**What changed.** `cli/lisa/redact.py`: the known secrets (the Global Storage secret key and the registry
+token, plain and in base64; the access key in base64) are blanked by value, besides Secret data and
+tokens by shape. Applied to interLink's logs and to everything from the login node in the evidence, and to
+`diag.txt`, which holds the end of interLink's logs. The leak check still runs after, as before.
+
+**Open point.** interLink's own logs in `~/lisa-runner/log` keep those values (private files, mode 600).
+Pods that take secrets into their environment are a reason to lower interLink's log level once trials
+are over.
+
+**Evidence.** `make unit`: 172 passed (new: a pod's environment with the secret resolved, as it leaked;
+Secret data, tokens and base64 forms).
+
+---
+
+## 2026-11-25, 16:40: CNES's pipelines, simpler: their files in `~/cnes`, each test brings what it uses
+
+**Problem.** TC21's first try failed in Argo (`stress-pipeline` not found) because `CNES_TEMPLATES` was
+not set, so `make up` had skipped CNES's step. The user: "I think this is doing a lot no? we should
+literally just have the workflow specified in the test with yaml and it should just run." Running their
+stress test took two settings (`CNES_TEMPLATES`, `CNES_STRESS_INPUTS`), clones or copies of their files on
+Ulisses at paths the settings named, a step in `make up`, and inputs uploaded there.
+
+**Why not simply put their files in the test's folder:** the repository is public (and must stay so, for
+Ulisses to pull it), and their files are ESA's, from a private GitLab. So they stay outside, in one fixed
+place.
+
+**What changed.**
+- **`CNES_DIR`** (default `~/cnes`) holds their WorkflowTemplate files; `CNES_TEMPLATES` and
+  `CNES_STRESS_INPUTS` are gone (an old settings file still loads; `make check` lists them as unread).
+- **Each test says what of CNES's it uses,** in its `expect.yaml`: `cnes: {templates: [...], inputs:
+  [...]}`. `make test` installs those templates and makes those inputs just before it submits; a missing
+  file fails that test with where to put it.
+- **`make up` keeps only the platform:** the artifact repository in their layout and the
+  platform-config-map, always.
+- **`make cnes [INPUTS="..."]`:** installs every template in `~/cnes` and makes the inputs, to run a
+  pipeline by hand, from Argo's UI as CNES's document does.
+- **An input is replaced unless it was made as CNES's script makes it:** the upload marks it (object
+  metadata `generator`, and its `sha256`), so the `idefix.h5` of random bytes uploaded before (TC20, the
+  night before) is made again.
+- **`docs/operations.md`, "CNES's pipelines":** how to run them, by test and by hand, and a table of what
+  their pipelines need from any platform that runs them (templates, the two ConfigMaps and their keys,
+  Secrets, the two storages, inputs, images and the private registry, memory to convert images, room on
+  the HPC side, bandwidth to the LocalStorage). The user asked for it as the requirements a future
+  interface would rely on.
+
+- **`make progress`:** the workflows running in the namespace (or the last one): each step's pod, when it
+  started, how long it took or has been running, its phase, and the Slurm job that runs it (state,
+  node). Asked for while TC21 ran on Deucalion: following it took `kubectl` and a Python one-liner that a
+  paste broke. `watch -n 30 make -s progress` follows it.
+
+**Costs.** Their files must still be copied to `~/cnes` on Ulisses once.
+
+**Evidence.** `make unit`: 169 passed (new: `cnes:` in `expect.yaml`; templates from `CNES_DIR`, all or
+by name, and the error naming a missing file).
+
+---
+
+## 2026-11-25, 16:00: TC21, CNES's stress test with asterix.h5 (1 GiB), to time the tunnel; their inputs byte for byte
+
+**Context.** The user wants to run CNES's stress test with large inputs (`obelix.h5`, 10 GB) and expects
+datasets of about 500 GB. All data crosses the tunnel (Slurm's I/O forwarding and SSH, between Deucalion
+and Ulisses), and its throughput has never been measured. Capacity: Ulisses has 767 GB free on the disk
+that holds the MinIO's `emptyDir` (capped at 20 GiB until now); `/home/jcosta.up` on Deucalion has a
+25 GiB quota (778 MB used). Discussed: for 500 GB the LocalStorage must be inside Deucalion, next to the
+compute nodes, as in CNES's own data lifecycle; the tunnel would then carry control only. First, one
+measurement.
+
+**What changed.**
+- **TC21** (`tests/21-cnes-stress-asterix/`): CNES's pipeline, unchanged, with `asterix.h5` (1 GiB), one
+  module, one iteration, 1 GiB outputs, so each transfer stands alone in the logs: the ingest's copy into
+  the cache (down the tunnel and back), the module's stage-in and stage-out, the dispatch.
+- **Their inputs, byte for byte:** `cnes.generate` follows their script
+  (`data/stress-pipeline/scripts/create_global_inputs_for_stresspipeline.py`: numpy's legacy generator,
+  seed 42427, 1 MiB chunks of `randint(0, 255)`); `make up` provides those named in `CNES_STRESS_INPUTS`
+  (default `idefix asterix`; `obelix` on request). TC20's earlier `idefix.h5` was random bytes of ours.
+  numpy becomes a dependency.
+- **`MINIO_SIZE`** (default 50 GiB, was a fixed 20 GiB): the MinIO's `emptyDir` limit.
+- **The report gives Argo's reason** for a workflow that did not succeed (`status.message`), in the
+  terminal and in `report.md`. TC21's first run on Deucalion (`20261125-162617`) ended in `Error` after
+  5 s without a single pod, and the report said only that. The reason: `workflowtemplates.argoproj.io
+  "stress-pipeline" not found`, because `CNES_TEMPLATES` was not set on Ulisses, so `make up` had
+  skipped CNES's templates. `make test` now refuses a test named on purpose whose needs the setup lacks
+  (here `cnes`), and says which setting is missing, before submitting anything.
+
+**Evidence.**
+- Their script against ours, run side by side on the Mac: `idefix.h5`
+  `80826036d8a38001799f3cad077b097133651a2325def98032da60e3583abe28` and `asterix.h5`
+  `f055ec1e8aabf6fe6de35fc04d746e50674be1412ad2b4c2fdcba45a78c48ce8` (SHA-256), identical from both.
+- `make unit`: 167 passed.
+
+---
+
+## 2026-11-25, 15:15: CNES's pipelines run unchanged; TC20, their stress test (branch `test/cnes-stress-test-pipeline`)
+
+**Context.** CNES sent a stress-test pipeline (`lisa-sgs/sys/testing/mockpipelines`,
+`workflows/stress-pipeline.yaml`, and their document "StressTest Pipeline", 25 Nov 2026). Its ingest and
+dispatch come from their PipelineRunner's `common-templates` (`lisa-sgs/sys/components/pipelinerunner`,
+`.../chart/files/argo-workflows/workflows/common/CommonTemplates.yaml`), which read the platform from two
+ConfigMaps of their Helm chart. The private image their ingest runs already works (TC13, evening).
+
+**What changed.**
+- **The artifact repository in CNES's layout** (`runner/cluster/artifact-repository.yaml`): the default
+  repository is named `localstorage`, with their single keys beside it (`localstorage-s3-{bucket,
+  endpoint,protocol,secretname}`, `localstorage-globalstoragecache-s3-bucket`,
+  `globalstorage-s3-{endpoint,protocol,secretname,bucket-prefix}`), and the label
+  `workflows.argoproj.io/configmap-type: Parameter`, without which Argo does not let templates read
+  ConfigMap keys. Every key their templates read is there (checked against their files). The names
+  clash: what this repository calls the Global Storage (Isabel Moutinho's term) is CNES's
+  LocalStorage; their GlobalStorage is here buckets `GS_GLOBAL_PREFIX*` (default `globalstorage-`) on
+  the same MinIO, as in their single-node setup (`deployconfig/pipelinerunner/singlenode`).
+- **`runner/cluster/platform-config-map.yaml`:** `registry: ""` (public images by their plain names,
+  which the mirror fetches) and `registry_sys: gitlab.esa.int/` (ESA's images as the mirror serves
+  them). No `global-index-url`, so their dispatch skips LISA's global index.
+- **`cli/lisa/components/cnes.py`, run by `make up` when `CNES_TEMPLATES` is set:** applies their
+  WorkflowTemplates from the files named there (local clones), exactly as in their files but for the
+  namespace they are installed in (`ARGO_NAMESPACE`; theirs names `argo-ddpc-systeam`), the
+  platform-config-map, and the stress test's input in the GlobalStorage
+  (`globalstorage-test/stress-pipeline/inputs/idefix.h5`, 10 MiB of random bytes, as their script makes).
+  Nothing of theirs is copied into this repository: their code is ESA's, private, and this repository
+  may be public.
+- **TC20** (`tests/20-cnes-stress/`): a plain Workflow that runs their `stress-pipeline` template
+  (`workflowTemplateRef`) with small parameters (2 modules in parallel, 1 iteration, 30 s, 10 MiB files,
+  the 10 MB input). Ours only: `podGC.deleteDelayDuration: 1h`, so the pods outlive their success long
+  enough for the where-check. It checks the phase and three stages by their step names in CNES's files:
+  the ingest's reference scan, the final output, the dispatch's transfer. A new feature `cnes`
+  (templates, mirror, token).
+- `lisa test` accepts step checks on a workflow that uses a `workflowTemplateRef` (its entrypoint is in
+  the template). `make test TIMEOUT=<seconds>` sets how long a workflow may run (default 1800): TC20 is
+  about ten pods, five of them in a row in the ingest, each with its queue and tunnel.
+- **The release of stuck pods, corrected** (`testing/runner.py`). The evening's version deleted a test's
+  pods only when its workflow was still unfinished after the timeout. But Argo's stop marks the workflow
+  Failed within seconds while the stuck pod keeps running, so that never fired: TC20's scanner pod on the
+  testbed still held `cn` (job 516) after its test had ended. The runner now deletes any step pod still
+  Pending or Running once a test is over, whatever the workflow's phase.
+
+**Costs and open points.**
+- `CNES_TEMPLATES` names files outside this repository: Ulisses needs clones of the two repositories,
+  with ESA GitLab access.
+- The naming clash (our Global Storage, their LocalStorage) is only documented; renaming the `GS_*`
+  settings is for later.
+- Not yet run end to end: the testbed cannot run the scanner (amd64 only), so TC20 runs on Deucalion.
+  Unknowns there: whether the scanner accepts random bytes named `.h5`, and how much data the tunnel
+  carries (start small, then one parameter at a time).
+
+**Evidence.**
+- **Their files, unchanged.** What is applied differs from their files only in `metadata.namespace`
+  (their `spec`s compared equal, after a first version had also dropped `generateName` and added our
+  label: both put back, as the user asked that nothing of theirs be changed). The files used, by git blob
+  hash (`git hash-object <file>`, comparable with `git ls-tree` in their repositories):
+  `stress-pipeline.yaml` `0b993098df632eb32c7b8ef25465df05b06a5e59` (mockpipelines `main`, `6546a61`;
+  the same as tag `1.0.0`, which their document links to), `CommonTemplates.yaml`
+  `175bb7063e7914e103805d785d59bb77e30d1bdb` (components/pipelinerunner, `main`, fetched 25 Nov 2026).
+- Their files against ours: loaded by `cnes.templates` (common-templates: 12 templates;
+  stress-pipeline: 5), the ConfigMap keys they read (9 in `artifact-repositories`, `registry` and
+  `registry_sys`) all present, and the three step names TC20 checks all in their files.
+- Testbed (run `20261125-151647`, `make up` with `CNES_TEMPLATES` naming copies of their two files):
+  `make up` applied `common-templates` and `stress-pipeline` in `lisa-jcosta`, the platform-config-map,
+  and the 10 MiB input. Argo accepted TC20 and resolved their template with our ConfigMaps: the ingest's
+  scanner pod named `gitlab.esa.int/lisa-sgs/sys/sandbox/global-index/hdf5-reference-scanner:0.16.0`
+  (`registry_sys`) and `AWS_ENDPOINT_URL=http://global-storage.lisa-jcosta.svc.cluster.local:9000`
+  (`globalstorage-s3-*`). It then stopped where expected, at the scanner (`no child with platform
+  linux/arm64`): TC20 runs end to end on Deucalion only.
+- Testbed, the corrected release (run `20261125-152642`, TC13 with a 4-minute timeout, stuck on the
+  testbed's architecture): Argo marked the workflow Failed, the runner recorded the test, then deleted
+  the pod still running (`diag.txt`: "the workflow is Failed but these pods were still running:
+  deleted"); 30 s later Slurm's queue was empty and no pod was left.
+- `make unit`: 159 passed (new: CNES's keys and label; their templates moved to our namespace; TC20 in
+  the tests of the tests).
+
+---
+
+## 2026-11-25, 13:20: the image mirror on Deucalion; with it, every job asks for its node's whole memory
+
+**What happened.** The first Deucalion run with `IMAGE_MIRROR=on` and the user's registry token (run
+`20261125-132221`, `make test T="00 05 12 13"`):
+- **TC00, TC05 and TC12 passed.** The mirror works on Deucalion: `--exclusive` and the fixed relay
+  address under `proctrack/cgroup`, and `busybox:1.37` fetched from Docker Hub by the mirror and
+  converted on a `normal-x86` node. Nodes `cnx019`, `cnx148`, `cnx423`.
+- **TC13 failed by running out of memory.** The mirror had fetched ESA's scanner with the token (its log:
+  "skipping image because it's already synced"; the errors after it are zot retrying a finished sync,
+  as on the testbed). The job's Singularity got the image through the tunnel, then:
+  `while creating squashfs: create command failed: signal: killed`. Slurm's record of the job (2270136):
+  `ReqMem 256M`, batch step `OUT_OF_MEMORY`. Deucalion enforces each job's memory
+  (`ConstrainRAMSpace=yes`, `TaskPlugin=task/cgroup,task/affinity`), the plugin sets it from the pod's
+  limit (TC13: 256Mi), and with the mirror the image's conversion runs inside the job. `busybox` fits;
+  a Python image does not.
+- **The pod then hung** for the test's 30 minutes (the open problem of the afternoon), holding a whole
+  node; `make clean` ended it.
+
+**Options considered** (the user chose the first):
+1. With the mirror, every job asks for all of its node's memory. It costs no more allocation on
+   `normal-x86`, where every job gets a whole node anyway; the pods' memory limits are then requested,
+   no longer enforced.
+2. Convert each image once, in a warm-up job with enough memory, into Singularity's cache in `$HOME`.
+   The limits stay enforced, but the images must be known in advance: the list the mirror removed.
+
+**What changed.**
+- **The sidecar's user service** (`runner/hpc/lisa-sidecar.service`): with `IMAGE_MIRROR=on`,
+  `Environment=SBATCH_MEM_PER_NODE=0`; without it, the same line as a comment.
+- **Why there, and not in the offload's Slurm flags:** the plugin writes our flags
+  (`slurm-job.vk.io/flags`) before its own `--cpus-per-task` and `--mem` in the job script, so a `--mem`
+  of ours would come first and lose. `sbatch` takes its environment over the script's `#SBATCH` lines,
+  and the plugin calls `sbatch` (through the subPath fix) with the sidecar's environment. No wrapper
+  grows.
+- **The test runner releases a workflow still running after its timeout** (`testing/runner.py`). Argo's
+  stop goes through the `wait` container, which waits for a `main` that never started, so such a pod
+  stays Running and its Slurm job keeps its node: on Deucalion a whole one, until `make clean`. Found on
+  the testbed: the afternoon's TC13 pod, stopped and marked Failed, still held `cn` two hours later (job
+  512), so the next test's job (515) waited behind it. After recording the test, the runner now deletes
+  such a workflow's pods (interLink then cancels their jobs) and says so in `diag.txt`.
+
+**Costs.**
+- With the mirror, a pod's memory limit no longer bounds it inside Slurm: it is passed on as a request
+  only. For CNES's stress test, which is about memory, a module could use more than its limit without
+  being killed; the test sets its own load from the same parameter (`memory-size` minus 64 MB).
+- Deucalion's billing of whole-node jobs is still to be confirmed (`billing` on the login node).
+
+**Evidence.**
+- Deucalion run `20261125-132221` and `sacct -j 2270136` (above); `grep -i constrain
+  /etc/slurm/cgroup.conf` and `scontrol show config` on the login node.
+- Testbed, the precedence itself: the same job script with `#SBATCH --mem=256`, submitted plainly (job
+  513: `mem=256M`) and with `SBATCH_MEM_PER_NODE=0` (job 514: `mem=1073M`, all of `cn`).
+- Testbed, `make testbed-test T="12"` with the new unit (run `20261125-143204`): TC12 passed. Its job
+  (515) ran with `mem=1073M`, `MinMemoryNode=0`, though its script says `--mem=256`; the sidecar's unit
+  on the login node has `Environment=SBATCH_MEM_PER_NODE=0`. Its 26 minutes are almost all the wait
+  behind job 512 (above), until that workflow was deleted by hand.
+- **Deucalion, after the change** (run `20261125-150457`, `make up`, then `make test T=13`): **TC13
+  passed** in 2m50s on `cnx080`. ESA's private image, fetched by the mirror with the user's token,
+  converted on the compute node with the node's whole memory, and run.
+- `make unit`: 149 passed (new: the unit has the line with the mirror, and not without; a timed-out
+  workflow's pods are deleted).
+
+---
+
+## 2026-11-25, 12:30: the testbed on `proctrack/cgroup`; the image mirror reaches public.ecr.aws and ESA's GitLab
+
+**Context.** CNES sent a stress-test pipeline (`lisa-sgs/sys/testing/mockpipelines`,
+`workflows/stress-pipeline.yaml`). Its ingest and dispatch come from their runner's `common-templates`
+(`lisa-sgs/sys/components/pipelinerunner`), which always runs a private image,
+`gitlab.esa.int:4567/lisa-sgs/sys/sandbox/global-index/hdf5-reference-scanner:0.16.0`, and the pipeline
+itself names `public.ecr.aws/docker/library/alpine:latest`. The user chose to fetch both through the
+image mirror, with a token of theirs, and to rehearse on the testbed first.
+
+**What changed.**
+- **The testbed's Slurm uses `proctrack/cgroup`** (`testbed/guest/cn.sh`, and applied to the running
+  VMs), as Deucalion does. Under `proctrack/linuxproc` a finished job's relay could outlive the job and
+  hold the mirror's fixed address, which is how TC05 failed with the mirror (24 Nov). The testbed was
+  thus unable to run any multi-pod workflow with the mirror; the user agreed to the change.
+- **The mirror** (`runner/cluster/image-mirror.yaml`):
+  - a rule for `public.ecr.aws` (anonymous pulls);
+  - a rule for one private registry, `MIRROR_PRIVATE_REGISTRY` (default `gitlab.esa.int:4567`), with
+    credentials from the Secret `image-mirror-credentials`, filled from `MIRROR_PRIVATE_USER` and
+    `MIRROR_PRIVATE_TOKEN` (a personal access token with only `read_registry`). The token stays in the
+    cluster and never reaches the login node; `make evidence` also checks that it is not in the evidence;
+  - its images are named without the port (`gitlab.esa.int/<path>:<tag>`): behind the mirror's own
+    address (`127.77.0.1:5000/<name>`) a second `host:port` cannot be part of an image name. CNES's
+    templates take that prefix from their `platform-config-map` (`registry_sys`), so this stays platform
+    configuration;
+  - a hash of the configuration and the credentials on the pod template, so a change restarts zot by
+    itself (it reads both at start). This replaces the restart `mirror on` did by comparing the
+    ConfigMap.
+- **`settings/testbed.env.example`:** `IMAGE_MIRROR=on`, now that the testbed meets the mirror's
+  conditions. `settings/deucalion.env.example` keeps it `off` until the mirror has run on Deucalion.
+- **TC13** (`tests/13-private-image/`): a plain workflow naming
+  `gitlab.esa.int/lisa-sgs/sys/sandbox/global-index/hdf5-reference-scanner:0.16.0`, the scanner CNES's
+  ingest runs, and asking it for its help. It shows the private image fetched with the token and run on
+  the compute node. A new feature, `private-registry` (the mirror and a token), so `make test` skips it
+  without them.
+
+**Costs and open points.**
+- The token is a personal one: it acts as the user, and anyone with cluster-admin on the cluster can read
+  the Secret. Hence `read_registry` only, and an expiry. A deploy token of the project would be better,
+  if CNES or ESA can issue one.
+- The private registry's image is pulled by Singularity on the compute node, through the tunnel, like any
+  other with the mirror: the same first-pull cost.
+
+**Evidence.**
+- Testbed, the property itself: a job that leaves `setsid sleep 333` behind and exits (job 504): after the
+  job, no `sleep 333` is left on `cn`.
+- Testbed, `make testbed-test T="00 05 12"` with the mirror (run interrupted by the end of a working
+  session during TC12): TC00 passed (1m35s) and **TC05 passed** (5m56s, its three parallel steps one
+  after the other on `cn`, each with its own whole node), the test that failed under
+  `proctrack/linuxproc`.
+- Testbed, `make testbed-test T="12 13"` with the mirror and the user's token (run `20261125-125806`):
+  - **TC12 passed** (1m55s): `busybox:1.37` from Docker Hub through the mirror.
+  - **TC13 failed, for a reason of the testbed's.** The token works: zot logged in to
+    `gitlab.esa.int:4567` and synced the scanner image ("successfully synced image", 13:01:31), and the
+    job's Singularity fetched it through the tunnel. It then stopped: `no child with platform
+    linux/arm64 in index`. The image is built for `linux/amd64` only (its index, read from the mirror),
+    and the testbed's compute node is an Apple Silicon VM (`aarch64`). A known constraint, not a defect
+    (the user: "it really isn't a problem but a constraint"): an image must exist for the compute
+    node's architecture, as for Deucalion's ARM partitions. Now in `docs/architecture.md`, known limits.
+  - **A finding:** with `main`'s image unusable, the pod did not fail. It stayed Running (2/2), because
+    Argo's `wait` container waits for `main`, which never started; the test would have waited for its
+    30-minute timeout. Stopped by hand (`spec.shutdown: Stop`). In `docs/open-problems.md`.
+  - **A mistake in TC13, found by the run:** its `expect.yaml` checked a step `scanner`, but with a
+    single template as the entrypoint Argo names the pod after the workflow, so no step name can match.
+    The check is gone, and `lisa test` now refuses such a test (a new check in `suite.py`, with a unit
+    test).
+- `make unit`: 147 passed (new: the mirror's rules, its credentials, the restart on a change; TC13 in
+  the tests of the tests; step checks only on DAG or steps entrypoints).
+- The image's location and tags: GitLab's API for project `lisa-sgs/sys/sandbox/global-index` (read with
+  a `read_api` token the user lent for the search; `0.16.0` exists).
+
+---
+
+## 2026-11-25, 11:40: the restructured code on Deucalion; Deucalion meets the image mirror's conditions
+
+**What happened.** On Ulisses, after `make results` and `make restore` with the old code:
+`make setup` (with the `UV_LINK_MODE=copy` fix; interLink rebuilt into `~/lisa-runner`, a few minutes),
+`make check`, `make up`, `make test`.
+
+**Results.**
+- **All 11 tests pass** with the restructured code (run `20261125-114031`; TC12 skipped without the
+  mirror). Every step pod a Slurm job in `normal-x86`, on nine nodes (`cnx019`, `cnx027`, `cnx046`,
+  `cnx061`, `cnx076`, `cnx151`, `cnx395`, `cnx415`, `cnx425`). Each test took within a minute of the bash
+  version's run of the same morning (`20261125-013956`); the queue varies.
+- **`make check` on Deucalion:** `ProctrackType proctrack/cgroup`, and partition `normal-x86`
+  `OverSubscribe=EXCLUSIVE`: every job gets a whole node anyway. So the image mirror's two conditions
+  hold there: a job's relay ends with the job, and its `--exclusive` costs nothing extra.
+
+**Evidence.** On Ulisses: `~/PipelineRunner/results/20261125-114031/` (`report.md`, `where.tsv`), and the
+check's output in `~/PipelineRunner/results/check-*.txt`.
+
+---
+
+## 2026-11-25, 10:30: uv copies packages instead of cloning them (Ulisses)
+
+**Problem.** The first `make setup` of the restructured code on Ulisses stopped before `lisa` ran: uv
+could not put the build dependencies into the environment.
+```
+Failed to install: editables-0.6-py3-none-any.whl (editables==0.6)
+Failed to clone `~/.cache/uv/archive-v0/.../editables/redirector.py` to `~/.cache/uv/builds-v0/...`
+Resource temporarily unavailable (os error 11)
+```
+uv fills an environment by cloning or hard-linking files from its cache, and Ulisses's home file system
+refuses that. The testbed (ext4) and the Mac did not, so the rehearsal could not catch it.
+
+**What changed.** The `Makefile` exports `UV_LINK_MODE=copy` (unless already set), so uv copies the
+files. Every `make` target runs uv through the Makefile, so this covers them all.
+
+**Costs.** The environment takes its full size on disk (`.venv`, about 100 MB) instead of sharing files
+with uv's cache, and the first install is a little slower.
+
+**Evidence.** On the Mac, `UV_LINK_MODE=copy uv sync --frozen --reinstall` rebuilt the environment and
+the project; `make unit`: 137 passed. On Ulisses: to be confirmed by the next `make setup`.
+
+---
+
+## 2026-11-25: the project restructure: `runner/`, `cli/lisa` in Python, `settings/`, a folder per test, five documents
+
+**Problem.** The user's words: it was "super difficult to actually understand what is the pipeline
+runner, what is config, what is for Ulisses". In detail:
+- **No line between the runner and its tooling.** Everything that gets installed (interLink's two
+  configuration files, the plugin's `SlurmConfig.yaml`, the systemd unit, Argo's `workflowDefaults`, the
+  MinIO and Global Storage manifests, the artifact repository) was written by heredocs inside
+  `k8s-side.sh` (937 lines) and `hpc-side.sh` (341 lines). The only way to see what the runner *is* was
+  to read 1,300 lines of bash.
+- **No single entry point:** two Makefiles (the root one for the testbed, `deploy/deucalion`'s for the
+  real site), two scripts, and `run.py`, which called back into `k8s-side.sh`.
+- **The Python was bash in Python:** `run.py` drove `argo`, `kubectl` and `mc` as commands and parsed
+  their output, and one 70-line function did everything for a test.
+- **Folders kept for history:** `experiments/reverse-tunnel/` (the first trial, finished),
+  `setup/hpc/` (one wrapper), `tests/datasets/users/...` (10 files, 8 of them empty placeholders, 2 for
+  the unported TC08).
+- **Twelve Markdown files** repeating each other, already drifting: links to `APPROACH.md` and
+  `CHANGELOG.md` at the root after they moved to `docs/`; a `diagrams.py` and PDFs the CHANGELOG
+  mentioned and the repository did not have; `NEXT_STEPS.md` calling pushed tags local; and
+  `deucalion.env.example` setting `IMAGE_MIRROR=on` while the docs said off.
+- **Tests that were hard to trust:** a PASS meant whatever `checks.py` checked, and nothing showed that a
+  check could fail.
+
+**Decisions** (the user's, in the session of 25 Nov): what the runner is (below); Python for the Kubernetes side; Mermaid for the
+diagrams for now (to be redrawn by hand for the thesis); the testbed left as it is ("it's for local test
+only, if it works it works"), only its pointers into `deploy/deucalion` changed; the subPath patch not
+proposed upstream yet; shared Argo and identity left for last; and this CHANGELOG kept whole, as the
+thesis's record of the process.
+
+**What the runner is.** Asked what they would hand CNES if they asked for it ("the whole python
+solution? probably not because that is ran on ulisses"), the user agreed on this definition, now at the
+top of the README: the runner is not a new program but a deployment architecture, Argo and interLink
+0.6.3 configured so that each step runs as a Slurm job on an offline partition and reaches back through
+the reverse tunnel. What a site gets is its configuration and one wrapper (`runner/`), the requirements
+on the site, an acceptance suite (`tests/`) and the documentation. `cli/` is how we deploy it on
+Ulisses as one user without root, run the suite and collect evidence; a site would deploy `runner/` its
+own way (in the cluster, as Deployments: open problems, next steps).
+
+**What changed.**
+- **`runner/`: what the runner is.** Every file that gets installed, as a real file with its why in a
+  comment, filled in from the settings with `${name}` placeholders: `runner/cluster/` (interLink's
+  configuration and the shadows' credentials, `workflow-defaults.yaml`, `artifact-repository.yaml`,
+  `global-storage/` for an endpoint outside the cluster, `image-mirror.yaml`) and `runner/hpc/`
+  (`SlurmConfig.yaml`, `lisa-sidecar.service`, `resources.sh`, `subpath-fix/` with the wrapper and
+  `upstream.patch`).
+- **`cli/manifests/`: what the tool puts in the cluster for itself,** kept out of `runner/` because a
+  site would not take them: the MinIO for trials (`GS_ENDPOINT=cluster`), the tests' namespace with
+  Argo's executor role, and the probe pod of `make up`.
+- **`cli/lisa`: how it is put in place, in Python** (3.11, Ulisses's own; dependencies pinned in
+  `uv.lock` and brought by `uv`, which `make` fetches into `~/lisa-runner/bin` without root):
+  - `adapters/`, the only code that talks to the outside: the Kubernetes API (the official client; Argo's
+    Workflows as API objects, server-side apply), S3 (`boto3`), the login node over SSH (`paramiko`,
+    host keys pinned on first contact and checked strictly after), HTTP, local processes;
+  - `components/`, one per part of the runner (argo, offload, artifacts, global_storage, image_mirror,
+    interlink, tunnel, sidecar);
+  - `commands/` (lifecycle, inspect, test, evidence) and `testing/` (suite, expect, runner, report);
+  - every module under about 200 lines.
+- **`cli/hpc.sh`: the login node's part, still bash** (the login node has no Python), 240 lines. It no
+  longer writes any configuration: `lisa` fills in the plugin's files from the settings and from what
+  the login node reports (where Slurm's commands are, the CPU architecture), and copies them to
+  `HPC_PROJECT_ROOT/runner`; `hpc.sh install` puts them in place.
+- **The login node's layout:** `HPC_PROJECT_ROOT/{runner,sidecar,sock,images}` instead of `.interlink/`,
+  `reverse-tunnel/` and `lisa-pipeline-runner_ze/`. The socket folder is shorter, so `HPC_PROJECT_ROOT`
+  may now have up to 74 characters (59 before).
+- **`settings/`:** `deucalion.env` and `testbed.env` (and their examples). `HPC_REPO_DIR` is gone;
+  `IMAGE_MIRROR` defaults to `off` in the example too, and is called experimental there.
+- **One entry point, the root `Makefile`:** `make settings/setup/check/up/test/evidence/restore` for a
+  site, `make testbed-*` for the testbed, `make unit` and `make lint` for the tool itself. `up` and
+  `check` copy the login node's files first, so a forgotten `make sync` can no longer leave the login
+  node on old settings.
+- **Tests: one folder each,** `tests/NN-name/` with `workflow.yaml` (plain Argo, unchanged but for its
+  keys), `expect.yaml` (what it must produce, declared instead of coded) and `input/`. Each test reads and
+  writes only under `tests/NN/` in the Global Storage (before: Isabel's `users/admin/test-NN/`,
+  `users/system/test-NN/` and `t1/`). Before a run everything under `tests/` is deleted and the inputs
+  uploaded.
+- **Trusting a PASS:**
+  - `report.md` per run: every check with what it expected and what it got, an artifact's actual
+    content too, and each step pod's Slurm job, partition and compute node;
+  - the terminal shows every check, not only failed ones;
+  - `cli/tests/` (`make unit`, 137 tests, no cluster needed) proves that every test fails on a run that
+    did nothing, on a run where Argo says Succeeded but nothing was written, on wrong content, and when a
+    step ran off the virtual node, without a Slurm record or in another partition;
+  - `lisa test` refuses to run a test that reads or checks keys outside its own prefix, or that checks
+    one of its own inputs (it would pass without the workflow writing anything).
+- **Docs:** `README.md` (what is where), `docs/architecture.md` (with Mermaid diagrams: what runs where,
+  one pod's sequence, the data path, images, the tool), `docs/operations.md` (`RUN_ON_ULISSES.md`,
+  `HOW_TO_RUN.md` and `deploy/deucalion/README.md` merged), `docs/results.md`, `docs/open-problems.md`
+  (was `NEXT_STEPS.md`), and this CHANGELOG. The SVG diagrams are gone (in the tag).
+- **Names:** `lisa-runner` instead of `deucalion-trial` (label `app.kubernetes.io/managed-by`), `lisa-*`
+  instead of `trial-*` (`lisa-hpc-ssh-key`, `lisa-hpc-known-hosts`, `lisa-probe`), `~/lisa-runner`
+  instead of `~/lisa-trial`. The split mode's leftovers (`SPLIT_ENV`, `REVERSE_IL_VERSION`,
+  `split-gs-creds`, the `split-trial` label) are gone.
+- **`Ulisses tutorials.pdf`** (Isabel's access guide) removed from the repository by the user.
+- **Fixed on the way:** `tunnel off` deleted every Service labelled as ours in the namespace, which with an
+  external Global Storage included the image mirror's; now only the Global Storage's Service and
+  EndpointSlice, by name.
+
+**Old path → new path.**
+
+| Before | Now |
+|---|---|
+| `deploy/deucalion/k8s-side.sh` | `cli/lisa/` (Python), with the configuration it wrote in `runner/cluster/` |
+| `deploy/deucalion/hpc-side.sh` | `cli/hpc.sh`, with the configuration it wrote in `runner/hpc/` |
+| `deploy/deucalion/Makefile`, root `Makefile` | root `Makefile` (`make <target>`, `make testbed-<target>`) |
+| `deploy/deucalion/{deucalion,testbed}.env.example` | `settings/` |
+| `deploy/deucalion/image-mirror.yaml` | `runner/cluster/image-mirror.yaml` |
+| the MinIO, the namespace role and the probe pod, as heredocs in `k8s-side.sh` | `cli/manifests/` |
+| `deploy/deucalion/results/` | `results/` |
+| `setup/hpc/subpath-fix/` | `runner/hpc/subpath-fix/` |
+| `experiments/reverse-tunnel/upstream/0001-...patch` | `runner/hpc/subpath-fix/upstream.patch` |
+| `experiments/reverse-tunnel/` (README, local results) | tag `before-restructure`; the results in `~/Documents/Dissertation/evidence/reverse-tunnel-experiment/` |
+| `tests/argo-native/NN-name.yaml`, `checks.py`, `run.py` | `tests/NN-name/{workflow,expect}.yaml`, `cli/lisa/testing/` |
+| `tests/datasets/users/...` | `tests/NN-name/input/` |
+| `RUN_ON_ULISSES.md`, `HOW_TO_RUN.md`, `deploy/deucalion/README.md` | `docs/operations.md` |
+| `docs/APPROACH.md` | `docs/architecture.md`, `docs/results.md` |
+| `docs/NEXT_STEPS.md` | `docs/open-problems.md` |
+| `~/lisa-trial` (Ulisses) | `~/lisa-runner` |
+
+**Costs and open points.**
+- **More lines in all:** 2,570 lines of Python (the tool) and 240 of bash (`hpc.sh`), plus the
+  templates and 306 lines of the tool's own tests, against 1,624 lines of bash and Python before
+  (`k8s-side.sh`, `hpc-side.sh`, `run.py`, `checks.py`). In exchange, each part can be read on its own,
+  and the tool has tests of its own.
+- **Dependencies:** `kubernetes`, `boto3`, `paramiko`, `PyYAML` and `uv`, fetched from PyPI and GitHub
+  (Ulisses reaches both). Before: the standard library, `kubectl`, `jq`, `argo` and `mc`.
+- **A one-time move on Ulisses and Deucalion** (`docs/operations.md`, section 5): restore with the old
+  code, then set up again. interLink is rebuilt into `~/lisa-runner`. `lisa` refuses to start while the
+  old version's state says it is on.
+- **Not yet run on Deucalion** at the time of this entry; the bash version's full run of the same day is
+  in the evidence below. The testbed rehearsal ran before the three manifests moved to `cli/manifests/`:
+  that move changed only paths, which the unit tests check (every template the code names exists and
+  fills in), but it has not been run against a cluster since.
+- **The layout is a working base, not the final one.** The user, on committing it: "I'm still not the
+  biggest fan of the folder structure but if it works we can work upwards". Later changes to the layout
+  get their own entries here.
+
+**Evidence.**
+- `make unit`: 137 passed; `make lint`: ruff clean.
+- Deucalion, the same day, with the bash scripts (`before-restructure`), run `20261125-013956`: all 11
+  tests pass (TC12 skipped without the mirror), 22 step pods, all Slurm jobs in `normal-x86` on
+  `cnx017`, `cnx066`, `cnx067`, `cnx074` and `cnx331`. The first Deucalion run of the full suite, and of
+  TC11 on a real offline node. Evidence collected on Ulisses in
+  `~/PipelineRunner/deploy/deucalion/results/20261125-013956/`.
+- Testbed, the restructured code, as the trial user without root: `make testbed-init` (setup) and
+  `make testbed-test T="00 11"`, run `20261125-022949`: TC00 3/3, TC11 3/3 (Slurm jobs 499 and 500,
+  partition `arm`, node `cn`). Then, on the same testbed: `make testbed A=status`, `A=evidence` (the
+  binaries' `vcs.revision` is the tag's commit `6b0203b0`; the plugin's sha256 matches the release's
+  published checksum), `A=check` (every check PASS; the probe shows the compute node offline, and
+  `srun --overlap` works), and `A=restore` (the virtual node, the credentials and every copy deleted,
+  `workflowDefaults` and `artifact-repositories` put back).
 
 ---
 

@@ -1,0 +1,34 @@
+# TC20: CNES's stress-test pipeline (lisa-sgs/sys/testing/mockpipelines, workflows/stress-pipeline.yaml),
+# run unchanged from its WorkflowTemplate, with small parameters. What it does (CNES's "StressTest
+# Pipeline" document): ingest an input from the GlobalStorage into the LocalStorage (their common
+# templates: a reference scan, a cache copy, a stream copy), then iterations of parallel stress modules
+# (stress-ng on CPU and memory, dd on the ephemeral storage, outputs to the LocalStorage), a final output,
+# and its dispatch to the GlobalStorage. Every pod of it runs as a Slurm job on the HPC side.
+# 'make test' installs CNES's two templates from ~/cnes and the input just before (its expect.yaml:
+# cnes); it needs the image mirror and a registry token, and 'make test' alone skips it without them.
+# Here: 2 modules in parallel, 1 iteration, 30 s of stress, 10 MiB files, the 10 MB input (idefix.h5).
+# The only thing of ours: the pods are deleted an hour after they succeed instead of at once (the
+# template's podGC), so the test can record where Slurm ran them.
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: native-20-cnes-stress-
+  labels: {test: native-20}
+spec:
+  workflowTemplateRef: {name: stress-pipeline}
+  podGC:
+    strategy: OnPodSuccess
+    deleteDelayDuration: 1h
+  arguments:
+    parameters:
+    - name: input-from-global
+      value: '{"fileName": "stress-pipeline/inputs/idefix.h5", "fileSize": "10"}'
+    - {name: nb-cpu, value: "0.1"}
+    - {name: memory-size, value: "256M"}
+    - {name: module-duration, value: "30s"}
+    - {name: nb-output-per-module, value: "1"}
+    - {name: module-output-size-in-MiB, value: "10"}
+    - {name: pipeline-output-size-in-MiB, value: "10"}
+    - {name: module-ephemeral-data-in-MiB, value: "10"}
+    - {name: nb-parallel-modules, value: "2"}
+    - {name: nb-iterations, value: "1"}

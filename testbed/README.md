@@ -6,8 +6,9 @@ Pipeline Runner, so experiments that need an HPC system can run locally and repe
 - **Stage A:** a login node and a compute node (the HPC side).
 - **Stage B:** adds `ulisses`, the Kubernetes side of the FEUP prototype (kubeadm, Argo, Dex,
   interLink) and its Global Storage (MinIO), all set up by Isabel Moutinho's own scripts.
-- **The trial:** the scripts used on Deucalion (`../deploy/deucalion`) run here, as a user without
-  root on `ulisses` and as `lisa` on the login node. Plain Argo workflows then run on the offline
+- **The trial:** the runner is set up and tested here exactly as on Ulisses (`make` at the repository
+  root, with `settings/testbed.env`), as a user without root on `ulisses` and as `lisa` on the login
+  node. Plain Argo workflows then run on the offline
   compute node through interLink 0.6.3 and its reverse tunnel.
 
 ## Requirements
@@ -21,20 +22,20 @@ Pipeline Runner, so experiments that need an HPC system can run locally and repe
 ## Usage
 
 The `Makefile` at the root of the repository is the entry point (`make` there lists every target,
-`../HOW_TO_RUN.md` section 1 explains them):
+`../docs/operations.md` section 3 explains them):
 
 ```sh
-make init              # build the VMs if needed (Stage A, then B), the trial user, 'make setup'
-make test-check        # fidelity checks; report in logs/check-<time>.md
-make test TESTS=00     # 'make up' and the tests, as the trial user
-make trial T=restore   # any target of deploy/deucalion/Makefile as the trial user
+make testbed-init             # build the VMs if needed (Stage A, then B), the trial user, 'make setup'
+make testbed-check            # fidelity checks; report in logs/check-<time>.md
+make testbed-test T=00        # 'make up' and the tests, as the trial user
+make testbed A=restore        # any site target of the Makefile as the trial user
 
-make status            # VMs, network mode, the trial's state
-make net-normal        # compute node without internet  (make net-dev: with internet)
-make ssh-login         # shell as lisa on the login node (ssh-compute, ssh-ulisses, ssh-*-root)
-make stop              # stop everything, frees the RAM  (make start to resume)
-make clean             # remove what tests and checks left in the VMs (jobs, images, caches)
-make clean-all         # delete the VMs and their state
+make testbed-status           # VMs and network mode (make testbed A=status: the trial's state)
+make testbed-net N=normal     # compute node without internet  (N=dev: with internet; N=status)
+make testbed-shell VM=login   # shell as lisa on the login node (VM=cn; VM=ulisses as root; ROOT=1 for root)
+make testbed-stop             # stop everything, frees the RAM  (make testbed-start to resume)
+make testbed-clean            # remove what tests and checks left in the VMs (jobs, images, caches)
+make testbed-destroy          # delete the VMs and their state
 ```
 
 `make` calls `./testbed`, which you can also run directly (`./testbed help`). If a step fails, its
@@ -43,17 +44,16 @@ log is in `logs/`, and the last lines are printed on the screen.
 `check` and `clean` refuse to run while the other is running: each one switches the compute node's
 network mode, so running both together mixes their results.
 
-**The trial user.** `./testbed trial setup` (part of `make init`):
+**The trial user.** `./testbed trial setup` (part of `make testbed-init`):
 - runs `guest/trial-user.sh` on `ulisses`, which creates `jcosta` with a kubeconfig that has
   cluster-admin through a ServiceAccount token and no sudo, as on Ulisses;
 - gives that user's SSH key to `lisa` on the login node;
 - copies this repository, without settings files, results or git, to `~jcosta/PipelineRunner`;
-- runs `make setup` there with `ENV_FILE=testbed.env`.
+- runs `make setup SITE=testbed` there.
 
-`./testbed trial make <targets>` runs any target of `deploy/deucalion/Makefile` as that user. The
-trial has its own virtual node, namespace, ports, project folder and sidecar
-(`deploy/deucalion/testbed.env.example`), next to the testbed's own installation of Isabel's
-prototype.
+`./testbed trial make <targets>` runs any target of the repository's `Makefile` as that user, with
+`SITE=testbed`. The trial has its own virtual node, namespace, ports, project folder and sidecar
+(`settings/testbed.env.example`), next to the testbed's own installation of Isabel's prototype.
 
 ## What it reproduces
 
@@ -96,13 +96,13 @@ reaches the login node by SSH (interLink's `ssh -L` tunnel). The testbed always 
 (`guest/loginnet.sh`, applied at start-up and before every test): the login node cannot open
 connections to `ulisses`; connections `ulisses` opens keep working. Only MinIO stays reachable,
 because it stands for the Global Storage, a separate host on Deucalion (her Azure VM) that the login
-node reaches. `make test-check` verifies it (U5-U7, and U1 for MinIO).
+node reaches. `make testbed-check` verifies it (U5-U7, and U1 for MinIO).
 
 ## Earlier tests (T0, T1)
 
 Until 24 Nov 2026 the testbed also ran two tests of its own. Their code is in the tag
-`split-interlink-0.6.1`, and their results are summarised in `../APPROACH.md` (git history before
-16 Nov 2026) and `../CHANGELOG.md`.
+`split-interlink-0.6.1`, and their results are summarised in `../docs/results.md` and
+`../docs/CHANGELOG.md`.
 - **T0:** Isabel's ten workflows, with her sync modules, in three modes: compute node online,
   offline, and offline with images pulled beforehand. It showed that her design cannot move data on
   an offline node, because her wrapper runs inside the Slurm job.
@@ -124,7 +124,7 @@ Until 24 Nov 2026 the testbed also ran two tests of its own. Their code is in th
   reach the login node through that NAT, which the reverse tunnel's shadow pods need (checked on
   17 Nov 2026).
 
-## Checks (`make test-check`)
+## Checks (`make testbed-check`)
 
 | ID | Expectation |
 |---|---|
@@ -142,14 +142,14 @@ Until 24 Nov 2026 the testbed also ran two tests of its own. Their code is in th
 
 - The host scripts run under the macOS system **bash 3.2**: no associative arrays, and no `-u`
   (an empty `"$@"` counts as unbound).
-- After a Mac reboot or sleep: `make start` (it re-syncs hosts, clocks and the network mode), not
-  `limactl start`. If switching the network mode ever hangs Lima's SSH:
-  `limactl stop -f tb-cn; make start`. interLink of the trial then needs `make test` (or
-  `make trial T=up`) again.
+- After a Mac reboot or sleep: `make testbed-start` (it re-syncs hosts, clocks and the network mode),
+  not `limactl start`. If switching the network mode ever hangs Lima's SSH:
+  `limactl stop -f tb-cn; make testbed-start`. interLink of the trial then needs `make testbed-test`
+  (or `make testbed A=up`) again.
 - Lima's user-v2 network: cn `192.168.104.1`, login `.3`, ulisses `.4` (`state/ips.env`). Port 111
   forwarding warnings are harmless.
-- Only one of `check` and `clean` can run at a time (a lock enforces it). `make clean` resets the
-  VMs after interrupted runs.
+- Only one of `check` and `clean` can run at a time (a lock enforces it). `make testbed-clean`
+  resets the VMs after interrupted runs.
 - Root on the VMs cannot write in `lisa`'s home on the login node, because `/home` is NFS with root
   squash: use `sudo -u lisa`.
 

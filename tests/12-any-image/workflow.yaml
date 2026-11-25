@@ -1,0 +1,28 @@
+# TC12: an image nobody built beforehand, named as in any Kubernetes workflow (busybox:1.37). Nothing
+# in this workflow is about the HPC side. With IMAGE_MIRROR=on, every image of the
+# pod, Argo's executor too, is pulled while the job runs: Singularity on the compute node pulls it
+# from the image mirror in the cluster (zot, fetching on demand from Docker Hub, quay.io and
+# ghcr.io), through the reverse tunnel. 'make test' skips it without the mirror (its expect.yaml: needs).
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: native-12-any-image-
+  labels: {test: native-12}
+spec:
+  entrypoint: hello
+  templates:
+  - name: hello
+    outputs:
+      artifacts:
+      - name: report
+        path: /tmp/out/image.txt
+        archive: {none: {}}
+        s3: {key: tests/12/image.txt}
+    container:
+      image: busybox:1.37
+      command: [sh, -c]
+      args:
+      - |
+        mkdir -p /tmp/out
+        { echo "image: $(busybox | head -n 1)"; echo "node: $(hostname)"; } | tee /tmp/out/image.txt
+      resources: {limits: {cpu: "1", memory: 256Mi}}

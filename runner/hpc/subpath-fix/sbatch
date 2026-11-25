@@ -1,0 +1,73 @@
+#!/bin/bash
+# subPath fix for the interLink Slurm plugin (tested with 0.6.3), as its SbatchPath.
+# Runs on the LOGIN node, called by the plugin as: sbatch <job folder>/job.slurm
+#
+# The only thing it does: Argo mounts each input artifact into 'main' (and into 'wait', under
+# /mainctrfs) from the emptyDir 'input-artifacts' with subPath=<artifact name>. The plugin ignores
+# subPath on emptyDirs (pkg/slurm/prepare.go, mountData: --bind <emptyDir>:<mountPath>), so the
+# container sees a directory where Argo put a file. This rewrites those binds to
+# <emptyDir>/<artifact name>, then submits with the real sbatch, unchanged otherwise.
+# To be removed once the plugin honours subPath: upstream.patch in this folder is that fix (9 lines and
+# a unit test, against the plugin's 0.6.3), not proposed upstream yet. Argo cannot be configured around
+# it: its controller hard-codes this mount. hpc.sh install writes subpath-fix.conf next to the installed
+# copy, with the path of the real sbatch.
+#
+# Nothing may be printed on stderr unless submission failed: the plugin treats any stderr
+# output as a failed submission. Diagnostics go to <job folder>/subpath-fix.log.
+HERE="$(cd "$(dirname "$0")" && pwd)"
+REAL_SBATCH=/usr/bin/sbatch
+# shellcheck disable=SC1091
+[ -f "$HERE/subpath-fix.conf" ] && source "$HERE/subpath-fix.conf"
+SLURM_FILE="$1"
+DIR="$(dirname "$SLURM_FILE")"
+JOB="$DIR/job.sh"
+LOG="$DIR/subpath-fix.log"
+log() { echo "$(date -Is) $*" >>"$LOG"; }
+
+# Always hand Slurm a job.sh that is a new file (copy, then rename). The plugin's own job.sh can
+# still count as open for writing where the job runs (seen on the testbed, whose compute node is
+# also the NFS server), and executing it then fails with "Text file busy".
+submit() {
+  if [ -f "$JOB" ] && cp -p "$JOB" "$JOB.new" 2>/dev/null; then
+    [ -n "${1:-}" ] && printf '%s\n' "$1" >"$JOB.new"
+    mv -f "$JOB.new" "$JOB"
+  fi
+  exec "$REAL_SBATCH" "$SLURM_FILE"
+}
+
+# Not every container's env file carries ARGO_TEMPLATE (main's does not): take one that does.
+ENVF="$(grep -l '^ARGO_TEMPLATE=' "$DIR"/*_envfile.properties 2>/dev/null | head -n 1)"
+if [ ! -f "$JOB" ] || [ -z "$ENVF" ]; then
+  submit
+fi
+
+# ARGO_TEMPLATE maps each input artifact's path to its name. No JSON parser needed: Argo writes the
+# template's fields in a fixed order (name, inputs, outputs, ...) and each artifact as
+# {"name":"...","path":"...",...}, so the input artifacts are the name/path pairs before "outputs".
+# shellcheck disable=SC1090
+TPL="$( set +u; set -a; source "$ENVF" >/dev/null 2>&1; printf '%s' "${ARGO_TEMPLATE:-}" )"
+TPL="${TPL%%\"outputs\":*}"
+MAP="$(printf '%s' "$TPL" | grep -o '"name":"[^"]*","path":"[^"]*"' | awk -F'"' '{print $8 "\t" $4}')"
+[ -n "$MAP" ] || { log "no input artifacts in ARGO_TEMPLATE: nothing to rewrite"; submit; }
+
+NEWJOB="$(cat "$JOB")"
+ED="$DIR/emptyDirs/input-artifacts"
+changed=0
+while IFS=$'\t' read -r apath aname; do
+  [ -n "$apath" ] || continue
+  # main mounts the artifact at <path>, wait at /mainctrfs<path>
+  for dest in "$apath" "/mainctrfs$apath"; do
+    from="--bind $ED:$dest:"
+    to="--bind $ED/$aname:$dest:"
+    if [[ "$NEWJOB" == *"$from"* ]]; then
+      NEWJOB="${NEWJOB//"$from"/"$to"}"; changed=1
+      log "subPath: $dest <- input-artifacts/$aname"
+    fi
+  done
+done <<<"$MAP"
+
+if [ "$changed" = 1 ]; then
+  cp -p "$JOB" "$DIR/job.sh.orig"
+  submit "$NEWJOB"
+fi
+submit

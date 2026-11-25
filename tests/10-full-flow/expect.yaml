@@ -1,0 +1,8 @@
+# The whole flow: write, then transform and simulate, then aggregate, then read.
+phase: Succeeded
+steps:
+  compute-read: Succeeded
+outputs:
+  tests/10/transformed-file.txt: TEST-03
+  tests/10/simulation.txt: completed after 60 seconds
+  tests/10/aggregate-file.txt: TEST-03

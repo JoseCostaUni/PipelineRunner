@@ -1,0 +1,6 @@
+# Fails on purpose: the second step reads a file that does not exist. The workflow must fail, and fail
+# there, while the first step, reading an existing file, succeeds.
+phase: Failed
+steps:
+  compute-read-success: Succeeded
+  compute-read-fail: Failed

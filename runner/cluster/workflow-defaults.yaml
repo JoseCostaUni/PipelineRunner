@@ -1,0 +1,21 @@
+# Argo's workflowDefaults while offload is on: the value 'lisa up' writes into the key workflowDefaults
+# of the ConfigMap argo/workflow-controller-configmap ('lisa down' puts back exactly what was there).
+#
+# Every workflow's pods go to our virtual node, as Slurm jobs of this account and partition, and every
+# pod asks interLink's reverse tunnel for what it must reach from the compute node. This is what lets
+# the workflows stay plain Argo. It applies to every workflow of this Argo, other users' too.
+#
+# With IMAGE_MIRROR=on, lisa adds two things here (docs/architecture.md, "Any image"):
+#   interlink.eu/reverse-bind: <MIRROR_BIND>   every pod's relay at the same address
+#   --exclusive in the Slurm flags              so two pods never share a node and that address
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: ${node}
+  tolerations:
+  - key: virtual-node.interlink/no-schedule
+    operator: Exists
+  podMetadata:
+    annotations:
+      slurm-job.vk.io/flags: "--account=${account} --partition=${partition}"
+      # Space separated, each host:port or local_port:host:port; names, not IP addresses.
+      interlink.eu/reverse-forwards: "${forwards}"

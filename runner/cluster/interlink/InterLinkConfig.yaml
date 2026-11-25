@@ -1,0 +1,11 @@
+# interLink's API, on the Kubernetes side (as your own process; lisa writes this file to
+# <LISA_HOME>/conf). It talks to the virtual kubelet over a Unix socket, and to the Slurm plugin on the
+# login node through an SSH tunnel whose local end is TUNNEL_PORT. Based on Isabel Moutinho's
+# (setup/kubernetes/3-bridge.sh in the FEUP prototype), with our paths.
+InterlinkAddress: "unix://${socket}"
+InterlinkPort: ""
+SidecarURL: "http://127.0.0.1"
+SidecarPort: "${tunnel_port}"
+VerboseLogging: true
+ErrorsOnlyLogging: false
+DataRootFolder: "${data}"

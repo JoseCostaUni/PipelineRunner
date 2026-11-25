@@ -1,0 +1,3 @@
+# The private image was fetched through the mirror with the token, and ran: the workflow succeeded.
+phase: Succeeded
+needs: private-registry

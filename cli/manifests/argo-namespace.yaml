@@ -1,0 +1,35 @@
+# Not part of the runner: a site's Argo already has its namespaces; this prepares one for the tests.
+# What Argo's executor needs in ARGO_NAMESPACE, where the workflows run: its pods run as the namespace's
+# default service account (Isabel Moutinho's argo-workflow-role, setup/kubernetes/2-argo.sh in the FEUP prototype).
+# Argo itself is installed from its release (ARGO_VERSION) only if the cluster has none.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argo-workflow-role
+  namespace: ${namespace}
+  labels: {app.kubernetes.io/managed-by: lisa-runner}
+rules:
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "watch", "create", "delete", "patch"]
+- apiGroups: [""]
+  resources: ["pods", "pods/log"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["argoproj.io"]
+  resources: ["workflows", "workflowtemplates", "workflowtaskresults"]
+  verbs: ["get", "list", "watch", "create", "delete", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-workflow-rolebinding
+  namespace: ${namespace}
+  labels: {app.kubernetes.io/managed-by: lisa-runner}
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: ${namespace}
+roleRef:
+  kind: Role
+  name: argo-workflow-role
+  apiGroup: rbac.authorization.k8s.io

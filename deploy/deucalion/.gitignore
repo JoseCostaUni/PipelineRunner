@@ -1,5 +1,0 @@
-# Hold the Global Storage keys.
-deucalion.env
-testbed.env
-# Results of k8s-side.sh test
-results/

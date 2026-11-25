@@ -1,2 +1,0 @@
-# Path of the real sbatch on this login node.
-REAL_SBATCH=/usr/bin/sbatch

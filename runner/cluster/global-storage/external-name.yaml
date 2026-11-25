@@ -1,0 +1,12 @@
+# A Global Storage outside the cluster, at a host name (GS_ENDPOINT=<host>:<port>), under the Service
+# name GS_SERVICE in ARGO_NAMESPACE: the tunnel maps names, not addresses. ('lisa down' deletes it.)
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${service}
+  namespace: ${namespace}
+  labels: {app.kubernetes.io/managed-by: lisa-runner}
+spec:
+  type: ExternalName
+  externalName: ${host}
+  ports: [{name: s3, port: ${port}}]

@@ -1,0 +1,20 @@
+# A Global Storage outside the cluster, at an IP address (GS_ENDPOINT=<ip>:<port>), under the Service
+# name GS_SERVICE in ARGO_NAMESPACE: the tunnel maps names, not addresses. ('lisa down' deletes it.)
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${service}
+  namespace: ${namespace}
+  labels: {app.kubernetes.io/managed-by: lisa-runner}
+spec:
+  ports: [{name: s3, port: ${port}, targetPort: ${port}}]
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: ${service}-1
+  namespace: ${namespace}
+  labels: {kubernetes.io/service-name: "${service}", app.kubernetes.io/managed-by: lisa-runner}
+addressType: IPv4
+ports: [{name: s3, port: ${port}}]
+endpoints: [{addresses: ["${address}"]}]

@@ -1,0 +1,5 @@
+# Three parallel writes, then an aggregate of the key prefix holding all three.
+phase: Succeeded
+outputs:
+  tests/05/write-file-1.txt: test-05-file-1
+  tests/05/aggregate-file.txt: [test-05-file-1, test-05-file-2, test-05-file-3]

@@ -1,0 +1,16 @@
+# What CNES's common templates read about the platform (their chart's platform-config-map): where images
+# come from. registry prefixes public images (empty: their plain names, as Kubernetes reads them, which
+# the image mirror fetches from their registries); registry_sys prefixes LISA's own images, in ESA's
+# GitLab registry, named as the image mirror serves them (MIRROR_PRIVATE_REGISTRY without its port).
+# No global-index-url: the dispatch then skips registering its outputs in LISA's global index.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-config-map
+  namespace: ${namespace}
+  labels:
+    app.kubernetes.io/managed-by: lisa-runner
+    workflows.argoproj.io/configmap-type: Parameter
+data:
+  registry: ""
+  registry_sys: "${registry_sys}"
